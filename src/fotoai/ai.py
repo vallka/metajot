@@ -1,13 +1,20 @@
 import base64
+import time
 from io import BytesIO
 from pathlib import Path
 
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 from PIL import Image
 from pydantic import BaseModel
 
 from fotoai.config import settings
 from fotoai.metadata import ImageMetadata
+
+# The OpenAI SDK already retries 429s internally, but with sub-second backoff
+# based on the error's own retry hint. Token-per-minute caps recover on a
+# rolling ~1 minute window, so on top of that we retry with longer backoff.
+MAX_RATE_LIMIT_RETRIES = 5
+RATE_LIMIT_BACKOFF_SECONDS = 5.0
 
 
 class AIResponse(BaseModel):
@@ -61,28 +68,35 @@ def generate_metadata(image_path: Path, current_meta: ImageMetadata) -> AIRespon
         prompt += "\n\nConsider the following existing metadata embedded in the photo:\n"
         prompt += "\n".join(context_lines)
 
-    response = client.beta.chat.completions.parse(
-        model=settings.ai.model,
-        messages=[
-            {
-                "role": "system",
-                "content": settings.prompts.system_prompt,
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}",
-                            "detail": "auto",
-                        },
+    messages = [
+        {
+            "role": "system",
+            "content": settings.prompts.system_prompt,
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{base64_image}",
+                        "detail": "auto",
                     },
-                ],
-            },
-        ],
-        response_format=AIResponse,
-    )
+                },
+            ],
+        },
+    ]
 
-    return response.choices[0].message.parsed
+    for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+        try:
+            response = client.beta.chat.completions.parse(
+                model=settings.ai.model,
+                messages=messages,
+                response_format=AIResponse,
+            )
+            return response.choices[0].message.parsed
+        except RateLimitError:
+            if attempt == MAX_RATE_LIMIT_RETRIES:
+                raise
+            time.sleep(RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1))
