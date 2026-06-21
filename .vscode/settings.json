@@ -8,5 +8,14 @@
                 "C:\\Program Files\\Git\\usr\\bin\\bash.exe"
             ]
         }
-    }
+    },
+    "python.analysis.extraPaths": [
+        "src"
+    ],
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "python.defaultInterpreterPath": "D:\\a\\fotoai\\.venv\\Scripts\\python.exe"
 }

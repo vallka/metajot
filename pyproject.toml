@@ -1,14 +1,30 @@
 [project]
 name = "fotoai"
 version = "0.1.0"
-description = "Add your description here"
+description = "FotoAI is a desktop Python application designed to automate the metadata tagging of `.jpg` files using AI models and format them for stock photo sites."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+
+dependencies = [
+    "exif>=1.6.1",
+    "iptcinfo3>=2.3.0",
+    "openai>=2.26.0",
+    "pillow>=11.0.0",
+    "pydantic>=2.12.5",
+    "rich>=14.3.3",
+]
+
+[project.scripts]
+fotoai = "fotoai.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "pytest-env>=1.1.5",
     "ruff>=0.15.5",
 ]
 
@@ -23,3 +39,10 @@ ignore = []
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "--basetemp=.tmp/pytest-temp"
+cache_dir = ".tmp/pytest-cache"
+env = [
+    "TEMP=.tmp",
+    "TMP=.tmp",
+    "TMPDIR=.tmp",
+]

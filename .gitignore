@@ -8,3 +8,13 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local secrets/config
+config.toml
+.env
+
+# Caches
+.tmp/
+.pytest_cache/
+.ruff_cache/
+.uv-cache/

@@ -1,0 +1,12 @@
+{
+  "include": [
+    "src"
+  ],
+  "venvPath": "D:\\a\\fotoai\\.venv",
+  "venv": ".venv",
+  "executionEnvironments": [
+    {
+      "root": "src"
+    }
+  ]
+}
