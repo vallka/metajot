@@ -54,11 +54,12 @@ so the key doesn't need to live on disk.
   working directory at runtime**, not the package location. `uv run fotoai` must be invoked from
   the project root (where `config.toml` lives) or the AI calls will fail with a missing API key.
   Same applies if installed as a `uv tool` — only the `OPENAI_API_KEY` env var path is cwd-independent.
-- `iptcinfo3`'s `IPTCInfo.save()` writes the new data directly back to the original file path and
-  moves the *previous* version to `<filename>~` as a backup (the reverse of what the name suggests
-  at a glance) — don't add logic that swaps these around.
+- `iptcinfo3`'s `IPTCInfo.save()` writes the new data directly back to the original file path,
+  moving the *previous* version to `<filename>~` as a backup by default (the reverse of what the
+  name suggests at a glance). `write_metadata()` passes `options=["overwrite"]` to skip that
+  backup entirely, since the old data isn't needed and the `~` files were just clutter.
 - `config.toml` and `.env` are gitignored since `config.toml` holds a live API key in this
   environment; don't suggest committing them.
 - `tests/fixtures/` contains real sample `.jpg` photos used for manual end-to-end verification
   (per the original implementation plan) — running the CLI against that directory mutates those
-  files' embedded metadata and leaves `iptcinfo3`'s `~` backups behind.
+  files' embedded metadata in place.

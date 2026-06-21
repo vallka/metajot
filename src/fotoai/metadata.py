@@ -86,9 +86,9 @@ def write_metadata(image_path: Path, title: str, description: str, keywords: Lis
         # Clear existing keywords and write new ones
         iptc["keywords"] = [k.encode("utf-8") for k in keywords]
 
-        # iptc.save() writes the new data back to image_path directly,
-        # backing up the previous version to "image_path~".
-        return bool(iptc.save())
+        # "overwrite" makes iptc.save() write back to image_path directly
+        # without leaving an "image_path~" backup of the previous version.
+        return bool(iptc.save(options=["overwrite"]))
     except Exception as e:
         print(f"Error writing metadata to {image_path}: {e}")
         return False
