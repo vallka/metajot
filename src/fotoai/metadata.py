@@ -81,6 +81,7 @@ def write_metadata(image_path: Path, title: str, description: str, keywords: Lis
         # 'object name' often mapped to Title in software (like Capture One / Lightroom)
         # 'caption/abstract' is Description
         iptc["object name"] = title.encode("utf-8")
+        iptc["headline"] = title.encode("utf-8")
         iptc["caption/abstract"] = description.encode("utf-8")
         
         # Clear existing keywords and write new ones
