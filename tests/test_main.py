@@ -21,4 +21,4 @@ def test_process_directory_empty(mock_write, mock_generate, mock_read, tmp_path)
 def test_config_loads_defaults():
     from fotoai.config import AppConfig
     config = AppConfig()
-    assert config.ai.model == "gpt-4o-mini"
+    assert config.ai.model == "gpt-5-mini"

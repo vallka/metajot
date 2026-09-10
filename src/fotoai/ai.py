@@ -16,11 +16,44 @@ from fotoai.metadata import ImageMetadata
 MAX_RATE_LIMIT_RETRIES = 5
 RATE_LIMIT_BACKOFF_SECONDS = 5.0
 
+# Adobe Stock's hard limit is 200 chars for titles and 49 for keywords;
+# Shutterstock allows up to 50 keywords. We enforce the tighter bound so a
+# single generated record is valid for both.
+MAX_TITLE_CHARS = 200
+MAX_KEYWORDS = 49
+
 
 class AIResponse(BaseModel):
+    # These analysis fields are generated before title/description/keywords
+    # (structured-output field order drives generation order), so the model
+    # enumerates concrete, buyer-searchable details instead of jumping
+    # straight to a compressed, generic title.
+    notable_subjects: list[str]
+    notable_details: list[str]
+    setting_and_context: str
+    mood_and_style: list[str]
+
     title: str
     description: str
     keywords: list[str]
+
+
+def _truncate_at_word_boundary(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rsplit(" ", 1)[0].rstrip(",.;:- ")
+
+
+def _dedupe_keywords(keywords: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result = []
+    for keyword in keywords:
+        keyword = keyword.strip()
+        if not keyword or keyword.lower() in seen:
+            continue
+        seen.add(keyword.lower())
+        result.append(keyword)
+    return result[:MAX_KEYWORDS]
 
 
 def encode_image(image_path: Path, max_dimension: int) -> str:
@@ -95,7 +128,12 @@ def generate_metadata(image_path: Path, current_meta: ImageMetadata) -> AIRespon
                 messages=messages,
                 response_format=AIResponse,
             )
-            return response.choices[0].message.parsed
+            parsed = response.choices[0].message.parsed
+            parsed.title = _truncate_at_word_boundary(
+                parsed.title.strip(), MAX_TITLE_CHARS
+            )
+            parsed.keywords = _dedupe_keywords(parsed.keywords)
+            return parsed
         except RateLimitError:
             if attempt == MAX_RATE_LIMIT_RETRIES:
                 raise

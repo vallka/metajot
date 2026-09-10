@@ -10,7 +10,7 @@ CONFIG_PATH = Path("config.toml")
 
 @dataclass
 class AIConfig:
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-5-mini"
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     max_image_dimension: int = 1024
@@ -44,7 +44,7 @@ def load_config(config_path: Path = CONFIG_PATH) -> AppConfig:
     api_key = os.getenv("OPENAI_API_KEY") or ai_data.get("api_key")
 
     app_config.ai = AIConfig(
-        model=ai_data.get("model", "gpt-4o-mini"),
+        model=ai_data.get("model", "gpt-5-mini"),
         base_url=ai_data.get("base_url"),
         api_key=api_key,
         max_image_dimension=ai_data.get("max_image_dimension", 1024),
