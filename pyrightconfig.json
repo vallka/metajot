@@ -2,7 +2,7 @@
   "include": [
     "src"
   ],
-  "venvPath": "D:\\a\\fotoai\\.venv",
+  "venvPath": ".",
   "venv": ".venv",
   "executionEnvironments": [
     {
