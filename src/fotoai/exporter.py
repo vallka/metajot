@@ -10,6 +10,8 @@ class ExportRecord:
     title: str  # Used by Adobe
     description: str  # Used by Shutterstock
     keywords: List[str]
+    adobe_category_id: str
+    shutterstock_categories: List[str]
 
 
 def export_adobe_stock_csv(records: List[ExportRecord], output_path: Path) -> None:
@@ -30,7 +32,7 @@ def export_adobe_stock_csv(records: List[ExportRecord], output_path: Path) -> No
                     record.filename,
                     record.title,
                     keyword_str,
-                    "",  # Category left blank for user selection via web
+                    record.adobe_category_id,
                 ]
             )
 
@@ -47,11 +49,13 @@ def export_shutterstock_csv(records: List[ExportRecord], output_path: Path) -> N
         for record in records:
             # Shutterstock requires keywords to be comma-separated strings
             keyword_str = ",".join(record.keywords)
+            # Shutterstock requires 1-2 categories, comma-separated
+            category_str = ",".join(record.shutterstock_categories)
             writer.writerow(
                 [
                     record.filename,
                     record.description,  # Shutterstock favors description over title
                     keyword_str,
-                    "",  # Categories left blank
+                    category_str,
                 ]
             )

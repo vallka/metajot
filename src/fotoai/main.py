@@ -4,7 +4,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.progress import track
 
-from fotoai.ai import generate_metadata
+from fotoai.ai import ADOBE_CATEGORY_IDS, generate_metadata
 from fotoai.exporter import (
     ExportRecord,
     export_adobe_stock_csv,
@@ -43,9 +43,21 @@ def process_directory(directory: Path) -> None:
             # 2. Call AI for rich metadata
             ai_data = generate_metadata(img_path, current_meta)
 
+            adobe_category_id = str(ADOBE_CATEGORY_IDS[ai_data.adobe_category.value])
+            shutterstock_categories = [ai_data.shutterstock_category_primary.value]
+            if ai_data.shutterstock_category_secondary:
+                shutterstock_categories.append(
+                    ai_data.shutterstock_category_secondary.value
+                )
+
             # 3. Write generated metadata back to the image
             success = write_metadata(
-                img_path, ai_data.title, ai_data.description, ai_data.keywords
+                img_path,
+                ai_data.title,
+                ai_data.description,
+                ai_data.keywords,
+                adobe_category_id,
+                shutterstock_categories,
             )
 
             if success:
@@ -55,6 +67,8 @@ def process_directory(directory: Path) -> None:
                         title=ai_data.title,
                         description=ai_data.description,
                         keywords=ai_data.keywords,
+                        adobe_category_id=adobe_category_id,
+                        shutterstock_categories=shutterstock_categories,
                     )
                 )
             else:

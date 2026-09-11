@@ -1,7 +1,9 @@
 import base64
 import time
+from enum import Enum
 from io import BytesIO
 from pathlib import Path
+from typing import Optional
 
 from openai import OpenAI, RateLimitError
 from PIL import Image
@@ -9,6 +11,66 @@ from pydantic import BaseModel
 
 from fotoai.config import settings
 from fotoai.metadata import ImageMetadata
+
+
+class AdobeStockCategory(str, Enum):
+    ANIMALS = "Animals"
+    BUILDINGS_AND_ARCHITECTURE = "Buildings and Architecture"
+    BUSINESS = "Business"
+    DRINKS = "Drinks"
+    THE_ENVIRONMENT = "The Environment"
+    STATES_OF_MIND = "States of Mind"
+    FOOD = "Food"
+    GRAPHIC_RESOURCES = "Graphic Resources"
+    HOBBIES_AND_LEISURE = "Hobbies and Leisure"
+    INDUSTRY = "Industry"
+    LANDSCAPES = "Landscapes"
+    LIFESTYLE = "Lifestyle"
+    PEOPLE = "People"
+    PLANTS_AND_FLOWERS = "Plants and Flowers"
+    CULTURE_AND_RELIGION = "Culture and Religion"
+    SCIENCE = "Science"
+    SOCIAL_ISSUES = "Social Issues"
+    SPORTS = "Sports"
+    TECHNOLOGY = "Technology"
+    TRANSPORT = "Transport"
+    TRAVEL = "Travel"
+
+
+# Adobe Stock's CSV Category column takes the numeric ID shown in their
+# upload-CSV dialog, not the category name.
+ADOBE_CATEGORY_IDS: dict[str, int] = {
+    category.value: i for i, category in enumerate(AdobeStockCategory, start=1)
+}
+
+
+class ShutterstockCategory(str, Enum):
+    ABSTRACT = "Abstract"
+    ANIMALS_WILDLIFE = "Animals/Wildlife"
+    ARTS = "The Arts"
+    BACKGROUNDS_TEXTURES = "Backgrounds/Textures"
+    BEAUTY_FASHION = "Beauty/Fashion"
+    BUILDINGS_LANDMARKS = "Buildings/Landmarks"
+    BUSINESS_FINANCE = "Business/Finance"
+    CELEBRITIES = "Celebrities"
+    EDUCATION = "Education"
+    FOOD_AND_DRINK = "Food and drink"
+    HEALTHCARE_MEDICAL = "Healthcare/Medical"
+    HOLIDAYS = "Holidays"
+    INDUSTRIAL = "Industrial"
+    INTERIORS = "Interiors"
+    MISCELLANEOUS = "Miscellaneous"
+    NATURE = "Nature"
+    OBJECTS = "Objects"
+    PARKS_OUTDOOR = "Parks/Outdoor"
+    PEOPLE = "People"
+    RELIGION = "Religion"
+    SCIENCE = "Science"
+    SIGNS_SYMBOLS = "Signs/Symbols"
+    SPORTS_RECREATION = "Sports/Recreation"
+    TECHNOLOGY = "Technology"
+    TRANSPORTATION = "Transportation"
+    VINTAGE = "Vintage"
 
 # The OpenAI SDK already retries 429s internally, but with sub-second backoff
 # based on the error's own retry hint. Token-per-minute caps recover on a
@@ -36,6 +98,12 @@ class AIResponse(BaseModel):
     title: str
     description: str
     keywords: list[str]
+
+    # Chosen last, once title/description/keywords have already forced the
+    # model to settle on what the image actually is.
+    adobe_category: AdobeStockCategory
+    shutterstock_category_primary: ShutterstockCategory
+    shutterstock_category_secondary: Optional[ShutterstockCategory] = None
 
 
 def _truncate_at_word_boundary(text: str, max_chars: int) -> str:
@@ -133,6 +201,11 @@ def generate_metadata(image_path: Path, current_meta: ImageMetadata) -> AIRespon
                 parsed.title.strip(), MAX_TITLE_CHARS
             )
             parsed.keywords = _dedupe_keywords(parsed.keywords)
+            if (
+                parsed.shutterstock_category_secondary
+                == parsed.shutterstock_category_primary
+            ):
+                parsed.shutterstock_category_secondary = None
             return parsed
         except RateLimitError:
             if attempt == MAX_RATE_LIMIT_RETRIES:

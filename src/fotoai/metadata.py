@@ -17,6 +17,12 @@ class ImageMetadata:
     keywords: List[str] = field(default_factory=list)
     # Raw GPS coordinates if found (just strings representing the tuple or degrees for context)
     location_data: Optional[str] = None
+    # Adobe Stock has no standard metadata field for its category, so we
+    # repurpose the legacy IPTC "category"/"supplemental category" datasets
+    # (2:15 and 2:20) - unused elsewhere in this app - to keep it embedded
+    # alongside the rest of the metadata instead of only living in a CSV.
+    adobe_category_id: Optional[str] = None
+    shutterstock_categories: List[str] = field(default_factory=list)
 
 
 def decode_iptc_value(value) -> Optional[str]:
@@ -51,6 +57,14 @@ def read_metadata(image_path: Path) -> ImageMetadata:
         if iptc["keywords"]:
             meta.keywords = [decode_iptc_value(k) for k in iptc["keywords"] if k]
 
+        if category_bytes := iptc["category"]:
+            meta.adobe_category_id = decode_iptc_value(category_bytes)
+
+        supplemental = iptc["supplemental category"] or []
+        meta.shutterstock_categories = [
+            decoded for c in supplemental if c and (decoded := decode_iptc_value(c))
+        ]
+
     except Exception as e:
         print(f"Warning: Failed to read IPTC from {image_path}: {e}")
 
@@ -72,20 +86,38 @@ def read_metadata(image_path: Path) -> ImageMetadata:
     return meta
 
 
-def write_metadata(image_path: Path, title: str, description: str, keywords: List[str]) -> bool:
-    """Writes new IPTC Title, Description, and Keywords to the image."""
+def write_metadata(
+    image_path: Path,
+    title: str,
+    description: str,
+    keywords: List[str],
+    adobe_category_id: Optional[str] = None,
+    shutterstock_categories: Optional[List[str]] = None,
+) -> bool:
+    """Writes new IPTC Title, Description, Keywords, and categories to the image."""
     try:
         iptc = IPTCInfo(image_path, force=True)
-        
+
         # In IPTC:
         # 'object name' often mapped to Title in software (like Capture One / Lightroom)
         # 'caption/abstract' is Description
         iptc["object name"] = title.encode("utf-8")
         iptc["headline"] = title.encode("utf-8")
         iptc["caption/abstract"] = description.encode("utf-8")
-        
+
         # Clear existing keywords and write new ones
         iptc["keywords"] = [k.encode("utf-8") for k in keywords]
+
+        # Adobe Stock's category and Shutterstock's categories have no
+        # dedicated metadata field, so they're stored in the legacy IPTC
+        # "category"/"supplemental category" datasets (unused elsewhere)
+        # to keep them embedded with the rest of the metadata.
+        if adobe_category_id:
+            iptc["category"] = adobe_category_id.encode("utf-8")
+        if shutterstock_categories:
+            iptc["supplemental category"] = [
+                c.encode("utf-8") for c in shutterstock_categories
+            ]
 
         # "overwrite" makes iptc.save() write back to image_path directly
         # without leaving an "image_path~" backup of the previous version.
