@@ -11,11 +11,13 @@ dependencies = [
     "openai>=2.26.0",
     "pillow>=11.0.0",
     "pydantic>=2.12.5",
+    "pyside6>=6.8.0",
     "rich>=14.3.3",
 ]
 
 [project.scripts]
 fotoai = "fotoai.main:main"
+fotoai-gui = "fotoai.gui.app:main"
 
 [build-system]
 requires = ["hatchling"]
