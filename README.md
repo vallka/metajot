@@ -43,6 +43,16 @@ Run from the project root (see [Gotchas](#gotchas) below):
 uv run fotoai "<photo-folder>"
 ```
 
+Add `--editorial` to format the Shutterstock CSV description as an AP/Reuters-style
+editorial dateline (`"City, State/Country - Month Day Year: Description"`) for every photo
+in the folder, using IPTC location fields, GPS reverse-geocoding, or an AI-inferred guess
+from keywords, in that priority order. In the desktop GUI this is a per-photo checkbox
+instead, so you can mix editorial and regular photos in the same folder.
+
+```bash
+uv run fotoai "<photo-folder>" --editorial
+```
+
 ## Development
 
 ```bash

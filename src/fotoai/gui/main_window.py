@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -26,6 +27,8 @@ from fotoai.ai import (
     AdobeStockCategory,
     AIResponse,
     ShutterstockCategory,
+    build_shutterstock_description,
+    resolve_editorial_dateline,
 )
 from fotoai.exporter import (
     ExportRecord,
@@ -46,8 +49,9 @@ COL_KEYWORDS = 4
 COL_ADOBE_CATEGORY = 5
 COL_SHUTTER_PRIMARY = 6
 COL_SHUTTER_SECONDARY = 7
-COL_STATUS = 8
-COLUMN_COUNT = 9
+COL_EDITORIAL = 8
+COL_STATUS = 9
+COLUMN_COUNT = 10
 
 COLUMN_HEADERS = [
     "",
@@ -58,6 +62,7 @@ COLUMN_HEADERS = [
     "Adobe Category",
     "Shutterstock 1",
     "Shutterstock 2",
+    "Editorial",
     "Status",
 ]
 
@@ -185,6 +190,9 @@ class MainWindow(QMainWindow):
             self.table.setCellWidget(row, COL_SHUTTER_PRIMARY, primary_combo)
             self.table.setCellWidget(row, COL_SHUTTER_SECONDARY, secondary_combo)
 
+            editorial_checkbox = self._make_editorial_checkbox()
+            self.table.setCellWidget(row, COL_EDITORIAL, editorial_checkbox)
+
             status = "Done" if existing_meta.processed_at else "Pending"
             self.table.setItem(row, COL_STATUS, self._readonly_item(status))
 
@@ -214,6 +222,16 @@ class MainWindow(QMainWindow):
             combo.addItem(NO_SECONDARY)
         combo.addItems([c.value for c in ShutterstockCategory])
         return combo
+
+    @staticmethod
+    def _make_editorial_checkbox() -> QCheckBox:
+        checkbox = QCheckBox()
+        checkbox.setToolTip(
+            "Format the Shutterstock description as an editorial dateline "
+            '("City, State/Country - Month Day Year: Description") for '
+            "this photo."
+        )
+        return checkbox
 
     def start_processing(self) -> None:
         if not self.rows:
@@ -270,6 +288,7 @@ class MainWindow(QMainWindow):
     def write_and_export(self) -> None:
         records: list[ExportRecord] = []
         failures: list[str] = []
+        editorial_unresolved: list[str] = []
 
         for row, state in enumerate(self.rows):
             if not state.ai_data:
@@ -304,14 +323,34 @@ class MainWindow(QMainWindow):
             )
             if success:
                 self.table.item(row, COL_STATUS).setText("Written")
+
+                editorial_checkbox: QCheckBox = self.table.cellWidget(
+                    row, COL_EDITORIAL
+                )
+                editorial_requested = editorial_checkbox.isChecked()
+                current_meta = state.current_meta or ImageMetadata()
+                location_guess = state.ai_data.location_guess if state.ai_data else None
+                shutterstock_description = build_shutterstock_description(
+                    current_meta, description, location_guess, editorial_requested
+                )
+                # Only mark the CSV row Editorial if a dateline was actually
+                # resolved and applied above - marking it Yes without one
+                # would get the submission rejected by Shutterstock.
+                dateline_applied = editorial_requested and resolve_editorial_dateline(
+                    current_meta, location_guess
+                )
+                if editorial_requested and not dateline_applied:
+                    editorial_unresolved.append(state.path.name)
+
                 records.append(
                     ExportRecord(
                         filename=state.path.name,
                         title=title,
-                        description=description,
+                        description=shutterstock_description,
                         keywords=keywords,
                         adobe_category_id=adobe_category_id,
                         shutterstock_categories=shutterstock_categories,
+                        editorial=bool(dateline_applied),
                     )
                 )
             else:
@@ -327,6 +366,14 @@ class MainWindow(QMainWindow):
                 self,
                 "Some files failed",
                 "Failed to write metadata for:\n" + "\n".join(failures),
+            )
+        elif editorial_unresolved:
+            QMessageBox.warning(
+                self,
+                "Editorial dateline not applied",
+                "No location or date could be resolved for the following "
+                "photos, so they were exported without the editorial "
+                "dateline:\n" + "\n".join(editorial_unresolved),
             )
         else:
             QMessageBox.information(

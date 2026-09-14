@@ -19,8 +19,9 @@ Analyze the provided image and any existing metadata. Before writing anything me
 
 1. notable_subjects: every distinct subject, person, animal, or object visible in the frame.
 2. notable_details: specific, concrete details a buyer might search for that are easy to miss on a first glance - actions being performed, physical states or conditions (including things like injuries, blood, weapons, damage, or other unpleasant but factual details if present), clothing or uniforms, brands or props, and any architectural style, era, or design movement you can identify.
-3. setting_and_context: the location/setting, time of day, and season if visible. If GPS location data is provided, use it to identify the specific city, region, or country and mention it - but only state a specific landmark or place name if you are confident it is visually or contextually correct.
-4. mood_and_style: the mood, lighting quality, color palette, and any notable artistic or photographic style.
+3. setting_and_context: the location/setting, time of day, and season if visible. If a "Known Location" is provided in the context, treat it as already-confirmed and use it as-is. Otherwise, if GPS location data is provided, use it to identify the specific city, region, or country and mention it - but only state a specific landmark or place name if you are confident it is visually or contextually correct.
+4. location_guess: if you just named a city, region, or country in setting_and_context (from a "Known Location", GPS data, place names in the current keywords/title/description, or a visual landmark you recognize), restate that exact same place here as "City, State/Country" (or just a country/region if a specific city isn't identifiable) - this is required, not optional, whenever you were able to name a place above. Only leave it null if setting_and_context truly could not identify any location at all. Do not second-guess or apply a stricter confidence bar here than you just did above.
+5. mood_and_style: the mood, lighting quality, color palette, and any notable artistic or photographic style.
 
 Then, using that analysis, write:
 - title: a clear, specific, one-sentence title following the pattern [Subject] + [Action/Setting] + [Context/Lighting]. Prefer around 70 characters; never exceed 200. Never use generic titles like "Nature" or "Generated Image".

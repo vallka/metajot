@@ -4,7 +4,12 @@ from pathlib import Path
 from rich.console import Console
 from rich.progress import track
 
-from fotoai.ai import ADOBE_CATEGORY_IDS, generate_metadata
+from fotoai.ai import (
+    ADOBE_CATEGORY_IDS,
+    build_shutterstock_description,
+    generate_metadata,
+    resolve_editorial_dateline,
+)
 from fotoai.exporter import (
     ExportRecord,
     export_adobe_stock_csv,
@@ -15,7 +20,7 @@ from fotoai.metadata import read_metadata, write_metadata
 console = Console()
 
 
-def process_directory(directory: Path) -> None:
+def process_directory(directory: Path, editorial: bool = False) -> None:
     if not directory.is_dir():
         console.print(f"[red]Error: {directory} is not a valid directory.[/red]")
         return
@@ -61,16 +66,35 @@ def process_directory(directory: Path) -> None:
             )
 
             if success:
+                shutterstock_description = build_shutterstock_description(
+                    current_meta,
+                    ai_data.description,
+                    ai_data.location_guess,
+                    editorial,
+                )
+                # Only mark the CSV row Editorial if a dateline was actually
+                # resolved and applied above - marking it Yes without one
+                # would get the submission rejected by Shutterstock.
+                dateline_applied = editorial and resolve_editorial_dateline(
+                    current_meta, ai_data.location_guess
+                )
                 records.append(
                     ExportRecord(
                         filename=img_path.name,
                         title=ai_data.title,
-                        description=ai_data.description,
+                        description=shutterstock_description,
                         keywords=ai_data.keywords,
                         adobe_category_id=adobe_category_id,
                         shutterstock_categories=shutterstock_categories,
+                        editorial=bool(dateline_applied),
                     )
                 )
+                if editorial and not dateline_applied:
+                    console.print(
+                        f"[yellow]No location/date resolved for "
+                        f"{img_path.name} - exported without the editorial "
+                        f"dateline.[/yellow]"
+                    )
             else:
                 console.print(f"[red]Failed to write metadata to {img_path.name}[/red]")
 
@@ -100,9 +124,18 @@ def main():
     parser.add_argument(
         "directory", type=Path, help="Directory containing .jpg files to process"
     )
+    parser.add_argument(
+        "--editorial",
+        action="store_true",
+        help=(
+            "Format the Shutterstock CSV description as an AP/Reuters-style "
+            "editorial dateline (\"City, State/Country - Month Day Year: "
+            "Description\") for every photo in this run."
+        ),
+    )
 
     args = parser.parse_args()
-    process_directory(args.directory)
+    process_directory(args.directory, editorial=args.editorial)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,9 @@ class ExportRecord:
     keywords: List[str]
     adobe_category_id: str
     shutterstock_categories: List[str]
+    # Whether this photo's description was formatted as an AP/Reuters-style
+    # editorial dateline - drives Shutterstock's own "Editorial" CSV column.
+    editorial: bool = False
 
 
 def export_adobe_stock_csv(records: List[ExportRecord], output_path: Path) -> None:
@@ -40,11 +43,25 @@ def export_adobe_stock_csv(records: List[ExportRecord], output_path: Path) -> No
 def export_shutterstock_csv(records: List[ExportRecord], output_path: Path) -> None:
     """
     Exports a list of records to a Shutterstock compatible CSV file.
-    Standard Headers: Filename, Description, Keywords, Categories
+    Headers (order matters - Shutterstock matches columns positionally):
+    Filename, Description, Keywords, Categories, Illustration, Mature
+    Content, Editorial. The last three are officially optional, but Editorial
+    is column G, so Illustration/Mature Content (E/F) must still be present
+    to keep it in the right position.
     """
     with open(output_path, mode="w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["Filename", "Description", "Keywords", "Categories"])
+        writer.writerow(
+            [
+                "Filename",
+                "Description",
+                "Keywords",
+                "Categories",
+                "Illustration",
+                "Mature Content",
+                "Editorial",
+            ]
+        )
 
         for record in records:
             # Shutterstock requires keywords to be comma-separated strings
@@ -57,5 +74,8 @@ def export_shutterstock_csv(records: List[ExportRecord], output_path: Path) -> N
                     record.description,  # Shutterstock favors description over title
                     keyword_str,
                     category_str,
+                    "No",  # Illustration - FotoAI only processes photographs
+                    "No",  # Mature Content - not something FotoAI classifies
+                    "Yes" if record.editorial else "No",
                 ]
             )

@@ -1,0 +1,10 @@
+cities.tsv and countries.tsv are derived from the GeoNames geographical
+database (https://www.geonames.org/), used under the Creative Commons
+Attribution 4.0 License (https://creativecommons.org/licenses/by/4.0/).
+
+Source dumps: cities15000.zip, countryInfo.txt, admin1CodesASCII.txt
+from https://download.geonames.org/export/dump/
+
+Trimmed down to only the columns fotoai.location needs (name, latitude,
+longitude, country code, admin1 code, population / country code, country
+name) to keep the bundled files small.

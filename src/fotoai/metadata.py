@@ -6,6 +6,7 @@ from typing import List, Optional
 from exif import Image as ExifImage
 from iptcinfo3 import IPTCInfo
 
+from fotoai.location import format_editorial_location, reverse_geocode
 from fotoai.xmp import read_fotoai_processed_at, read_xmp_packet, write_xmp_metadata
 
 # iptcinfo3 can be very noisy in the console, so we suppress its warnings
@@ -19,6 +20,15 @@ class ImageMetadata:
     keywords: List[str] = field(default_factory=list)
     # Raw GPS coordinates if found (just strings representing the tuple or degrees for context)
     location_data: Optional[str] = None
+    gps_latitude: Optional[float] = None
+    gps_longitude: Optional[float] = None
+    # Existing IPTC location fields, if the original editing tool (e.g.
+    # Capture One) already filled them in.
+    iptc_city: Optional[str] = None
+    iptc_province_state: Optional[str] = None
+    iptc_country: Optional[str] = None
+    # IPTC "date created" (CCYYMMDD), needed for editorial datelines.
+    date_created: Optional[str] = None
     # Adobe Stock has no standard metadata field for its category, so we
     # repurpose the legacy IPTC "category"/"supplemental category" datasets
     # (2:15 and 2:20) - unused elsewhere in this app - to keep it embedded
@@ -29,6 +39,27 @@ class ImageMetadata:
     # marker into this file - the authoritative "already processed" signal,
     # independent of whether category data happens to be filled in.
     processed_at: Optional[str] = None
+
+
+def _dms_to_decimal(dms: tuple, ref: Optional[str]) -> Optional[float]:
+    """Converts an EXIF (degrees, minutes, seconds) GPS tuple to decimal
+    degrees, negative for South/West as the ref hemisphere requires."""
+    try:
+        degrees, minutes, seconds = dms
+        decimal = degrees + minutes / 60 + seconds / 3600
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    if ref in ("S", "W"):
+        decimal = -decimal
+    return decimal
+
+
+def _exif_datetime_to_iptc_date(exif_datetime: str) -> Optional[str]:
+    """Converts an EXIF DateTimeOriginal/DateTime value ("YYYY:MM:DD
+    HH:MM:SS") to the IPTC "date created" format (CCYYMMDD)."""
+    date_part = exif_datetime.split(" ", 1)[0]
+    digits = date_part.replace(":", "")
+    return digits if len(digits) == 8 and digits.isdigit() else None
 
 
 def decode_iptc_value(value) -> Optional[str]:
@@ -71,6 +102,15 @@ def read_metadata(image_path: Path) -> ImageMetadata:
             decoded for c in supplemental if c and (decoded := decode_iptc_value(c))
         ]
 
+        if city_bytes := iptc["city"]:
+            meta.iptc_city = decode_iptc_value(city_bytes)
+        if province_bytes := iptc["province/state"]:
+            meta.iptc_province_state = decode_iptc_value(province_bytes)
+        if country_bytes := iptc["country/primary location name"]:
+            meta.iptc_country = decode_iptc_value(country_bytes)
+        if date_bytes := iptc["date created"]:
+            meta.date_created = decode_iptc_value(date_bytes)
+
     except Exception as e:
         print(f"Warning: Failed to read IPTC from {image_path}: {e}")
 
@@ -94,10 +134,44 @@ def read_metadata(image_path: Path) -> ImageMetadata:
                 
                 if lat and lon:
                     meta.location_data = f"Lat: {lat} {lat_ref}, Lon: {lon} {lon_ref}"
+                    meta.gps_latitude = _dms_to_decimal(lat, lat_ref)
+                    meta.gps_longitude = _dms_to_decimal(lon, lon_ref)
+
+                # Camera-original JPEGs (e.g. straight off a phone) often
+                # carry EXIF DateTimeOriginal but no IPTC "date created" -
+                # that field tends to only get set by editing tools like
+                # Capture One/Lightroom on export. Fall back to it so the
+                # editorial dateline still has a date to work with.
+                if not meta.date_created:
+                    exif_datetime = exif_img.get("datetime_original") or exif_img.get(
+                        "datetime"
+                    )
+                    if exif_datetime:
+                        meta.date_created = _exif_datetime_to_iptc_date(exif_datetime)
     except Exception as e:
         print(f"Warning: Failed to read EXIF from {image_path}: {e}")
 
     return meta
+
+
+def resolve_deterministic_location(meta: ImageMetadata) -> Optional[str]:
+    """Resolves an editorial-style "City, State/Country" location for a photo
+    without needing AI: prefers IPTC location fields already filled in by the
+    original editing tool, then falls back to reverse-geocoding embedded GPS
+    coordinates. Returns None if neither is available - callers should then
+    fall back to asking the AI to infer a location from keywords/visuals."""
+    if meta.iptc_city:
+        region = meta.iptc_province_state or meta.iptc_country
+        if region:
+            return f"{meta.iptc_city}, {region}"
+        return meta.iptc_city
+
+    if meta.gps_latitude is not None and meta.gps_longitude is not None:
+        city = reverse_geocode(meta.gps_latitude, meta.gps_longitude)
+        if city:
+            return format_editorial_location(city)
+
+    return None
 
 
 def write_metadata(
