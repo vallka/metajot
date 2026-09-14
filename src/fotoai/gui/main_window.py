@@ -33,7 +33,7 @@ from fotoai.exporter import (
     export_shutterstock_csv,
 )
 from fotoai.gui.worker import ProcessingWorker
-from fotoai.metadata import ImageMetadata, write_metadata
+from fotoai.metadata import ImageMetadata, read_metadata, write_metadata
 
 THUMBNAIL_SIZE = 96
 NO_SECONDARY = "(none)"
@@ -60,6 +60,10 @@ COLUMN_HEADERS = [
     "Shutterstock 2",
     "Status",
 ]
+
+# Reverse of ai.ADOBE_CATEGORY_IDS, to map the numeric ID stored on disk back
+# to the category name the combo box displays.
+ADOBE_CATEGORY_NAMES_BY_ID = {str(v): k for k, v in ADOBE_CATEGORY_IDS.items()}
 
 
 @dataclass
@@ -145,22 +149,50 @@ class MainWindow(QMainWindow):
         self.table.setRowCount(len(images))
 
         for row, path in enumerate(images):
+            # read_metadata() is the single "master" place FotoAI's own
+            # writer keeps IPTC/EXIF/XMP in sync through, so reopening a
+            # processed folder shows exactly what was last written, however
+            # it was written (title/description/keywords all come from IPTC;
+            # the fotoai:ProcessedAt marker comes from XMP).
+            existing_meta = read_metadata(path)
+            self.rows[row].current_meta = existing_meta
+
             thumb_label = QLabel()
             thumb_label.setPixmap(load_thumbnail(path))
             self.table.setCellWidget(row, COL_THUMB, thumb_label)
             self.table.setItem(row, COL_FILENAME, self._readonly_item(path.name))
-            for col in (COL_TITLE, COL_DESCRIPTION, COL_KEYWORDS):
-                self.table.setItem(row, col, QTableWidgetItem(""))
-            self.table.setCellWidget(row, COL_ADOBE_CATEGORY, self._make_adobe_combo())
-            self.table.setCellWidget(
-                row, COL_SHUTTER_PRIMARY, self._make_shutter_combo()
-            )
-            self.table.setCellWidget(
-                row, COL_SHUTTER_SECONDARY, self._make_shutter_combo(allow_none=True)
-            )
-            self.table.setItem(row, COL_STATUS, self._readonly_item("Pending"))
+            title_item = QTableWidgetItem(existing_meta.title or "")
+            self.table.setItem(row, COL_TITLE, title_item)
+            desc_item = QTableWidgetItem(existing_meta.description or "")
+            self.table.setItem(row, COL_DESCRIPTION, desc_item)
+            keywords_item = QTableWidgetItem(", ".join(existing_meta.keywords))
+            self.table.setItem(row, COL_KEYWORDS, keywords_item)
+
+            adobe_combo = self._make_adobe_combo()
+            adobe_id = existing_meta.adobe_category_id or ""
+            adobe_name = ADOBE_CATEGORY_NAMES_BY_ID.get(adobe_id)
+            if adobe_name:
+                adobe_combo.setCurrentText(adobe_name)
+            self.table.setCellWidget(row, COL_ADOBE_CATEGORY, adobe_combo)
+
+            primary_combo = self._make_shutter_combo()
+            secondary_combo = self._make_shutter_combo(allow_none=True)
+            categories = existing_meta.shutterstock_categories
+            if categories:
+                primary_combo.setCurrentText(categories[0])
+            if len(categories) > 1:
+                secondary_combo.setCurrentText(categories[1])
+            self.table.setCellWidget(row, COL_SHUTTER_PRIMARY, primary_combo)
+            self.table.setCellWidget(row, COL_SHUTTER_SECONDARY, secondary_combo)
+
+            status = "Done" if existing_meta.processed_at else "Pending"
+            self.table.setItem(row, COL_STATUS, self._readonly_item(status))
 
         self.process_btn.setEnabled(bool(images))
+        # write_and_export() only acts on rows with freshly-generated ai_data,
+        # not merely on rows read from disk, so it stays disabled until
+        # "Process with AI" actually populates that - even for rows already
+        # marked Done above.
         self.write_btn.setEnabled(False)
 
     @staticmethod

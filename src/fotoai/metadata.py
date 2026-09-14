@@ -6,6 +6,8 @@ from typing import List, Optional
 from exif import Image as ExifImage
 from iptcinfo3 import IPTCInfo
 
+from fotoai.xmp import read_fotoai_processed_at, read_xmp_packet, write_xmp_metadata
+
 # iptcinfo3 can be very noisy in the console, so we suppress its warnings
 logging.getLogger("iptcinfo").setLevel(logging.ERROR)
 
@@ -23,6 +25,10 @@ class ImageMetadata:
     # alongside the rest of the metadata instead of only living in a CSV.
     adobe_category_id: Optional[str] = None
     shutterstock_categories: List[str] = field(default_factory=list)
+    # Set only when a previous FotoAI run stamped the XMP fotoai:ProcessedAt
+    # marker into this file - the authoritative "already processed" signal,
+    # independent of whether category data happens to be filled in.
+    processed_at: Optional[str] = None
 
 
 def decode_iptc_value(value) -> Optional[str]:
@@ -67,6 +73,14 @@ def read_metadata(image_path: Path) -> ImageMetadata:
 
     except Exception as e:
         print(f"Warning: Failed to read IPTC from {image_path}: {e}")
+
+    # Read the fotoai:ProcessedAt marker from XMP, if any
+    try:
+        xmp_xml = read_xmp_packet(image_path.read_bytes())
+        if xmp_xml:
+            meta.processed_at = read_fotoai_processed_at(xmp_xml)
+    except Exception as e:
+        print(f"Warning: Failed to read XMP from {image_path}: {e}")
 
     # Read EXIF Data
     try:
@@ -121,7 +135,21 @@ def write_metadata(
 
         # "overwrite" makes iptc.save() write back to image_path directly
         # without leaving an "image_path~" backup of the previous version.
-        return bool(iptc.save(options=["overwrite"]))
+        if not iptc.save(options=["overwrite"]):
+            return False
+
+        # IPTC IIM alone isn't enough: Windows Explorer's Title/Subject
+        # columns and some stock sites (e.g. Pexels, Dreamstime) read XMP
+        # dc:title/dc:description/dc:subject instead, and ignore IPTC
+        # entirely. Mirror the same values into EXIF and XMP so every reader
+        # sees consistent metadata regardless of which block it trusts.
+        with open(image_path, "rb") as f:
+            exif_img = ExifImage(f)
+        exif_img.image_description = description
+        with open(image_path, "wb") as f:
+            f.write(exif_img.get_file())
+
+        return write_xmp_metadata(image_path, title, description, keywords)
     except Exception as e:
         print(f"Error writing metadata to {image_path}: {e}")
         return False
