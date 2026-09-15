@@ -7,6 +7,7 @@ from exif import Image as ExifImage
 from iptcinfo3 import IPTCInfo
 
 from fotoai.location import format_editorial_location, reverse_geocode
+from fotoai.sanitize import to_ascii
 from fotoai.xmp import read_fotoai_processed_at, read_xmp_packet, write_xmp_metadata
 
 # iptcinfo3 can be very noisy in the console, so we suppress its warnings
@@ -219,7 +220,15 @@ def write_metadata(
         # sees consistent metadata regardless of which block it trusts.
         with open(image_path, "rb") as f:
             exif_img = ExifImage(f)
-        exif_img.image_description = description
+        try:
+            exif_img.image_description = description
+        except Exception:
+            # EXIF's ImageDescription tag is ASCII-only per spec; the `exif`
+            # library raises on anything else. IPTC/XMP already carry the
+            # full-fidelity UTF-8 description, so fall back to a
+            # transliterated ASCII copy here rather than losing the rest of
+            # the write over an EXIF-only mirror field.
+            exif_img.image_description = to_ascii(description)
         with open(image_path, "wb") as f:
             f.write(exif_img.get_file())
 

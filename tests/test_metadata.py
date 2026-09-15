@@ -52,6 +52,30 @@ def test_write_metadata_syncs_iptc_exif_and_xmp(image_copy):
     assert "<rdf:li>kw2</rdf:li>" in xml
 
 
+def test_write_metadata_survives_non_ascii_description(image_copy):
+    # EXIF's ImageDescription tag is ASCII-only per spec; the `exif` library
+    # used to raise on a plain em dash, which aborted write_metadata()
+    # entirely even though the IPTC save just before it had already
+    # succeeded - leaving IPTC/XMP out of sync and the file reported as
+    # failed. write_metadata() should fall back to an ASCII-safe EXIF
+    # description instead of failing the whole write.
+    ok = write_metadata(
+        image_copy,
+        title="Title",
+        description="Café scene — street photography",
+        keywords=["kw1"],
+    )
+    assert ok is True
+
+    read_back = read_metadata(image_copy)
+    assert read_back.description == "Café scene — street photography"
+    assert read_back.keywords == ["kw1"]
+
+    with open(image_copy, "rb") as f:
+        exif_img = ExifImage(f)
+    assert exif_img.image_description == "Cafe scene - street photography"
+
+
 def test_processed_at_marker_distinguishes_untouched_from_written_files(image_copy):
     before = read_metadata(image_copy)
     assert before.processed_at is None

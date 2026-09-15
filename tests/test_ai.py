@@ -17,6 +17,14 @@ def test_build_shutterstock_description_plain_when_not_editorial():
     assert result == DESC
 
 
+def test_build_shutterstock_description_strips_banned_chars():
+    meta = ImageMetadata()
+    result = build_shutterstock_description(
+        meta, "Cats & dogs <playing> indoor/outdoor", editorial=False
+    )
+    assert result == "Cats and dogs playing indoor outdoor"
+
+
 def test_build_shutterstock_description_editorial_uses_iptc_location():
     meta = ImageMetadata(
         iptc_city="Edinburgh", iptc_country="UK", date_created="20250830"

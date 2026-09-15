@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from fotoai.config import settings
 from fotoai.location import build_editorial_description, format_editorial_date
 from fotoai.metadata import ImageMetadata, resolve_deterministic_location
+from fotoai.sanitize import sanitize_shutterstock_description, sanitize_typography
 
 
 class AdobeStockCategory(str, Enum):
@@ -135,7 +136,7 @@ def _dedupe_keywords(keywords: list[str]) -> list[str]:
     seen: set[str] = set()
     result = []
     for keyword in keywords:
-        keyword = keyword.strip()
+        keyword = sanitize_typography(keyword).strip()
         if not keyword or keyword.lower() in seen:
             continue
         seen.add(keyword.lower())
@@ -220,8 +221,9 @@ def generate_metadata(image_path: Path, current_meta: ImageMetadata) -> AIRespon
             )
             parsed = response.choices[0].message.parsed
             parsed.title = _truncate_at_word_boundary(
-                parsed.title.strip(), MAX_TITLE_CHARS
+                sanitize_typography(parsed.title.strip()), MAX_TITLE_CHARS
             )
+            parsed.description = sanitize_typography(parsed.description.strip())
             parsed.keywords = _dedupe_keywords(parsed.keywords)
             if (
                 parsed.shutterstock_category_secondary
@@ -280,11 +282,13 @@ def build_shutterstock_description(
     description/location_guess as plain values (not an AIResponse) so a
     user's manual edits to the description in the GUI are honored too."""
     if not editorial:
-        return description
+        return sanitize_shutterstock_description(description)
 
     dateline = resolve_editorial_dateline(current_meta, location_guess)
     if not dateline:
-        return description
+        return sanitize_shutterstock_description(description)
 
     location, date_text = dateline
-    return build_editorial_description(location, date_text, description)
+    return sanitize_shutterstock_description(
+        build_editorial_description(location, date_text, description)
+    )
