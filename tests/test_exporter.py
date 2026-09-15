@@ -1,6 +1,6 @@
 import csv
 
-from fotoai.exporter import ExportRecord, export_shutterstock_csv
+from metajot.exporter import ExportRecord, export_shutterstock_csv
 
 
 def _read_csv(path):

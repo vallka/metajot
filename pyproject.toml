@@ -1,7 +1,7 @@
 [project]
-name = "fotoai"
+name = "metajot"
 version = "0.1.0"
-description = "FotoAI is a desktop Python application designed to automate the metadata tagging of `.jpg` files using AI models and format them for stock photo sites."
+description = "MetaJot is a desktop Python application designed to automate the metadata tagging of `.jpg` files using AI models and format them for stock photo sites."
 readme = "README.md"
 requires-python = ">=3.12"
 
@@ -16,8 +16,8 @@ dependencies = [
 ]
 
 [project.scripts]
-fotoai = "fotoai.main:main"
-fotoai-gui = "fotoai.gui.app:main"
+metajot = "metajot.main:main"
+metajot-gui = "metajot.gui.app:main"
 
 [build-system]
 requires = ["hatchling"]

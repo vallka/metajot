@@ -24,15 +24,15 @@ NS_RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 NS_DC = "http://purl.org/dc/elements/1.1/"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
 
-# Nominal namespace identifying FotoAI's own custom property - doesn't need to
+# Nominal namespace identifying MetaJot's own custom property - doesn't need to
 # resolve to anything, it just has to be globally unique, per XMP convention.
-NS_FOTOAI = "https://github.com/vallka/fotoai/ns/1.0/"
+NS_METAJOT = "https://github.com/vallka/metajot/ns/1.0/"
 PROCESSED_AT_TAG = "ProcessedAt"
 
 ET.register_namespace("x", NS_X)
 ET.register_namespace("rdf", NS_RDF)
 ET.register_namespace("dc", NS_DC)
-ET.register_namespace("fotoai", NS_FOTOAI)
+ET.register_namespace("metajot", NS_METAJOT)
 
 # Other namespaces commonly found in XMP packets written by camera/editing
 # tools (Capture One, Lightroom, Photoshop). Registering them isn't required
@@ -166,8 +166,8 @@ def _set_bag(desc: ET.Element, tag: str, values: List[str]) -> None:
         li.text = value
 
 
-def read_fotoai_processed_at(xml_text: str) -> Optional[str]:
-    """Returns the fotoai:ProcessedAt timestamp recorded by a previous FotoAI
+def read_metajot_processed_at(xml_text: str) -> Optional[str]:
+    """Returns the metajot:ProcessedAt timestamp recorded by a previous MetaJot
     run, if any - the marker used to tell already-processed files apart from
     untouched ones when a folder is reopened."""
     try:
@@ -180,7 +180,7 @@ def read_fotoai_processed_at(xml_text: str) -> Optional[str]:
     desc = rdf.find(_qn(NS_RDF, "Description"))
     if desc is None:
         return None
-    return desc.get(_qn(NS_FOTOAI, PROCESSED_AT_TAG))
+    return desc.get(_qn(NS_METAJOT, PROCESSED_AT_TAG))
 
 
 def build_updated_xmp(
@@ -192,8 +192,8 @@ def build_updated_xmp(
 ) -> str:
     """Returns an XMP packet with dc:title/dc:description/dc:subject set to the
     given values, preserving every other property already in existing_xml.
-    Also stamps fotoai:ProcessedAt (current UTC time by default) as an
-    unambiguous "this file was processed by FotoAI" marker, independent of
+    Also stamps metajot:ProcessedAt (current UTC time by default) as an
+    unambiguous "this file was processed by MetaJot" marker, independent of
     whatever category data happens to be filled in."""
     root = _parse_xmp_root(existing_xml) if existing_xml else _new_xmp_root()
     rdf = _find_or_create_rdf(root)
@@ -202,7 +202,7 @@ def build_updated_xmp(
     _set_lang_alt(desc, "description", description)
     _set_bag(desc, "subject", keywords)
     desc.set(
-        _qn(NS_FOTOAI, PROCESSED_AT_TAG),
+        _qn(NS_METAJOT, PROCESSED_AT_TAG),
         processed_at or datetime.now(timezone.utc).isoformat(),
     )
 
@@ -229,7 +229,7 @@ def write_xmp_metadata(
     """Writes title/description/keywords into the JPEG's XMP dc:title,
     dc:description and dc:subject properties, creating the XMP packet if the
     file doesn't have one yet. Leaves every other XMP property untouched.
-    Also stamps a fotoai:ProcessedAt marker (see build_updated_xmp)."""
+    Also stamps a metajot:ProcessedAt marker (see build_updated_xmp)."""
     try:
         data = image_path.read_bytes()
         existing_xml = read_xmp_packet(data)

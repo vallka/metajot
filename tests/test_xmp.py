@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from fotoai.xmp import _find_xmp_segment, read_xmp_packet, write_xmp_metadata
+from metajot.xmp import _find_xmp_segment, read_xmp_packet, write_xmp_metadata
 
 FIXTURE = Path(__file__).parent / "fixtures" / "25-06-12-DSC00334-1.jpg"
 

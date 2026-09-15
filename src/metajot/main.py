@@ -4,18 +4,18 @@ from pathlib import Path
 from rich.console import Console
 from rich.progress import track
 
-from fotoai.ai import (
+from metajot.ai import (
     ADOBE_CATEGORY_IDS,
     build_shutterstock_description,
     generate_metadata,
     resolve_editorial_dateline,
 )
-from fotoai.exporter import (
+from metajot.exporter import (
     ExportRecord,
     export_adobe_stock_csv,
     export_shutterstock_csv,
 )
-from fotoai.metadata import read_metadata, write_metadata
+from metajot.metadata import read_metadata, write_metadata
 
 console = Console()
 
@@ -119,7 +119,7 @@ def process_directory(directory: Path, editorial: bool = False) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="FotoAI: AI-powered metadata tagger for stock photos."
+        description="MetaJot: AI-powered metadata tagger for stock photos."
     )
     parser.add_argument(
         "directory", type=Path, help="Directory containing .jpg files to process"

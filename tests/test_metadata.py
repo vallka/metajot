@@ -6,14 +6,14 @@ import pytest
 from exif import Image as ExifImage
 from iptcinfo3 import IPTCInfo
 
-from fotoai.metadata import (
+from metajot.metadata import (
     ImageMetadata,
     _exif_datetime_to_iptc_date,
     read_metadata,
     resolve_deterministic_location,
     write_metadata,
 )
-from fotoai.xmp import read_xmp_packet
+from metajot.xmp import read_xmp_packet
 
 logging.getLogger("iptcinfo").setLevel(logging.ERROR)
 

@@ -1,4 +1,4 @@
-from fotoai.location import (
+from metajot.location import (
     build_editorial_description,
     format_editorial_date,
     format_editorial_location,

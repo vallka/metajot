@@ -6,9 +6,9 @@ from typing import List, Optional
 from exif import Image as ExifImage
 from iptcinfo3 import IPTCInfo
 
-from fotoai.location import format_editorial_location, reverse_geocode
-from fotoai.sanitize import to_ascii
-from fotoai.xmp import read_fotoai_processed_at, read_xmp_packet, write_xmp_metadata
+from metajot.location import format_editorial_location, reverse_geocode
+from metajot.sanitize import to_ascii
+from metajot.xmp import read_metajot_processed_at, read_xmp_packet, write_xmp_metadata
 
 # iptcinfo3 can be very noisy in the console, so we suppress its warnings
 logging.getLogger("iptcinfo").setLevel(logging.ERROR)
@@ -36,7 +36,7 @@ class ImageMetadata:
     # alongside the rest of the metadata instead of only living in a CSV.
     adobe_category_id: Optional[str] = None
     shutterstock_categories: List[str] = field(default_factory=list)
-    # Set only when a previous FotoAI run stamped the XMP fotoai:ProcessedAt
+    # Set only when a previous MetaJot run stamped the XMP metajot:ProcessedAt
     # marker into this file - the authoritative "already processed" signal,
     # independent of whether category data happens to be filled in.
     processed_at: Optional[str] = None
@@ -115,11 +115,11 @@ def read_metadata(image_path: Path) -> ImageMetadata:
     except Exception as e:
         print(f"Warning: Failed to read IPTC from {image_path}: {e}")
 
-    # Read the fotoai:ProcessedAt marker from XMP, if any
+    # Read the metajot:ProcessedAt marker from XMP, if any
     try:
         xmp_xml = read_xmp_packet(image_path.read_bytes())
         if xmp_xml:
-            meta.processed_at = read_fotoai_processed_at(xmp_xml)
+            meta.processed_at = read_metajot_processed_at(xmp_xml)
     except Exception as e:
         print(f"Warning: Failed to read XMP from {image_path}: {e}")
 

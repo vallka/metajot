@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from fotoai.ai import (
+from metajot.ai import (
     ADOBE_CATEGORY_IDS,
     AdobeStockCategory,
     AIResponse,
@@ -30,13 +30,13 @@ from fotoai.ai import (
     build_shutterstock_description,
     resolve_editorial_dateline,
 )
-from fotoai.exporter import (
+from metajot.exporter import (
     ExportRecord,
     export_adobe_stock_csv,
     export_shutterstock_csv,
 )
-from fotoai.gui.worker import ProcessingWorker
-from fotoai.metadata import ImageMetadata, read_metadata, write_metadata
+from metajot.gui.worker import ProcessingWorker
+from metajot.metadata import ImageMetadata, read_metadata, write_metadata
 
 THUMBNAIL_SIZE = 96
 NO_SECONDARY = "(none)"
@@ -95,7 +95,7 @@ def load_thumbnail(path: Path, size: int = THUMBNAIL_SIZE) -> QPixmap:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("FotoAI")
+        self.setWindowTitle("MetaJot")
         self.resize(1300, 700)
 
         self.directory: Optional[Path] = None
@@ -154,11 +154,11 @@ class MainWindow(QMainWindow):
         self.table.setRowCount(len(images))
 
         for row, path in enumerate(images):
-            # read_metadata() is the single "master" place FotoAI's own
+            # read_metadata() is the single "master" place MetaJot's own
             # writer keeps IPTC/EXIF/XMP in sync through, so reopening a
             # processed folder shows exactly what was last written, however
             # it was written (title/description/keywords all come from IPTC;
-            # the fotoai:ProcessedAt marker comes from XMP).
+            # the metajot:ProcessedAt marker comes from XMP).
             existing_meta = read_metadata(path)
             self.rows[row].current_meta = existing_meta
 

@@ -1,4 +1,4 @@
-from fotoai.sanitize import (
+from metajot.sanitize import (
     sanitize_shutterstock_description,
     sanitize_typography,
     to_ascii,

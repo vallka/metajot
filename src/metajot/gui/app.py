@@ -2,7 +2,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from fotoai.gui.main_window import MainWindow
+from metajot.gui.main_window import MainWindow
 
 
 def main() -> None:

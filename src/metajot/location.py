@@ -3,8 +3,8 @@ formatting ("City, State/Country - Month Day Year").
 
 Turning GPS coordinates into a city name needs a real deterministic lookup,
 not a vision model guessing at raw lat/long numbers, so this module ships a
-small GeoNames-derived dataset (src/fotoai/data/cities.tsv,
-src/fotoai/data/countries.tsv - see data/ATTRIBUTION.txt) and does simple
+small GeoNames-derived dataset (src/metajot/data/cities.tsv,
+src/metajot/data/countries.tsv - see data/ATTRIBUTION.txt) and does simple
 nearest-neighbour matching in pure Python: no network calls, no extra
 heavyweight dependencies (numpy/scipy).
 """

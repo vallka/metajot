@@ -74,8 +74,8 @@ def export_shutterstock_csv(records: List[ExportRecord], output_path: Path) -> N
                     record.description,  # Shutterstock favors description over title
                     keyword_str,
                     category_str,
-                    "No",  # Illustration - FotoAI only processes photographs
-                    "No",  # Mature Content - not something FotoAI classifies
+                    "No",  # Illustration - MetaJot only processes photographs
+                    "No",  # Mature Content - not something MetaJot classifies
                     "Yes" if record.editorial else "No",
                 ]
             )

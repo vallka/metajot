@@ -9,10 +9,10 @@ from openai import OpenAI, RateLimitError
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from fotoai.config import settings
-from fotoai.location import build_editorial_description, format_editorial_date
-from fotoai.metadata import ImageMetadata, resolve_deterministic_location
-from fotoai.sanitize import sanitize_shutterstock_description, sanitize_typography
+from metajot.config import settings
+from metajot.location import build_editorial_description, format_editorial_date
+from metajot.metadata import ImageMetadata, resolve_deterministic_location
+from metajot.sanitize import sanitize_shutterstock_description, sanitize_typography
 
 
 class AdobeStockCategory(str, Enum):

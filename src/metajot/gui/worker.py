@@ -2,8 +2,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from fotoai.ai import AIResponse, generate_metadata
-from fotoai.metadata import ImageMetadata, read_metadata
+from metajot.ai import AIResponse, generate_metadata
+from metajot.metadata import ImageMetadata, read_metadata
 
 
 class ProcessingWorker(QThread):

@@ -1,9 +1,9 @@
-from fotoai.ai import (
+from metajot.ai import (
     build_shutterstock_description,
     resolve_editorial_dateline,
     resolve_editorial_location,
 )
-from fotoai.metadata import ImageMetadata
+from metajot.metadata import ImageMetadata
 
 DESC = "A harbour scene."
 EDITORIAL_DESC = "Edinburgh, UK - August 30, 2025: A harbour scene."
