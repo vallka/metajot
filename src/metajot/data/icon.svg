@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2F80ED"/>
+      <stop offset="1" stop-color="#1A4C9C"/>
+    </linearGradient>
+    <clipPath id="scene">
+      <rect x="44" y="56" width="136" height="104" rx="8"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background tile -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+
+  <!-- Photo -->
+  <rect x="30" y="42" width="164" height="132" rx="16" fill="#FFFFFF"/>
+  <g clip-path="url(#scene)">
+    <rect x="44" y="56" width="136" height="104" fill="#D6E6FF"/>
+    <circle cx="146" cy="88" r="14" fill="#F2A93B"/>
+    <polygon points="30,170 92,100 126,138 148,116 196,170" fill="#2F80ED"/>
+  </g>
+
+  <!-- Keyword tag, pointing at the photo -->
+  <g transform="translate(212 212) rotate(-135)">
+    <path d="M0 0 L26 -28 H104 a12 12 0 0 1 12 12 V16 a12 12 0 0 1 -12 12 H26 Z"
+          fill="#F2A93B" stroke="#FFFFFF" stroke-width="8" stroke-linejoin="round"/>
+    <circle cx="28" cy="0" r="8" fill="#FFFFFF"/>
+  </g>
+</svg>

@@ -26,6 +26,11 @@ uv run ruff check --fix src tests
 
 There is no separate build step (pure Python, hatchling backend).
 
+The app icon's source is [src/metajot/data/icon.svg](src/metajot/data/icon.svg); after editing it,
+regenerate `icon.ico` (all Windows sizes) with `uv run python scripts/build_icon.py`. The version
+lives in `pyproject.toml` (PEP 440, e.g. `0.1.0a1`) and is shown in the window title via
+`metajot.display_version()` ("0.1.0 alpha 1").
+
 ## Architecture
 
 Entry point is `main()` in [src/metajot/gui/app.py](src/metajot/gui/app.py), which opens

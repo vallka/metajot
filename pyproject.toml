@@ -1,6 +1,6 @@
 [project]
 name = "metajot"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "MetaJot is a desktop Python application designed to automate the metadata tagging of `.jpg` files using AI models and format them for stock photo sites."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from metajot import display_version
 from metajot.ai import (
     ADOBE_CATEGORY_IDS,
     AIResponse,
@@ -98,7 +99,7 @@ def _checkbox_item(checked: bool, tooltip: str) -> SortableItem:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MetaJot")
+        self.setWindowTitle(f"MetaJot {display_version()}")
         self.resize(1000, 800)
 
         self.directory: Optional[Path] = None
