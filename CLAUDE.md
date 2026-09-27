@@ -34,7 +34,11 @@ UI thread in `ProcessingWorker` ([gui/worker.py](src/metajot/gui/worker.py)), wh
 cancelled between photos. The list view is read-only apart from the Editorial checkboxes and
 sortable, so each photo's data lives in a `RowState` ([gui/row_state.py](src/metajot/gui/row_state.py)),
 not in table cells; clicking a thumbnail opens `DetailDialog`
-([gui/detail_dialog.py](src/metajot/gui/detail_dialog.py)) with the full metadata. Writing metadata
+([gui/detail_dialog.py](src/metajot/gui/detail_dialog.py)), where the metadata can be edited
+(read-only while the AI runs). `RowState` tracks unsaved changes separately: `dirty` (AI output),
+`edited` (manual edits) and `editorial_changed`. Unsaved edits are sent to the AI as context
+(`RowState.context_metadata()`) instead of re-reading the file; writing manual edits of a photo
+the AI hasn't processed passes `mark_processed=False`, so it isn't stamped `metajot:ProcessedAt`. Writing metadata
 (**Write Metadata**) and exporting CSVs (**Export CSVs**) are separate steps: export works from
 the table plus what's already embedded in the files, so a folder reopened later can be exported
 (e.g. with Editorial ticked) without re-running the AI. Pipeline:

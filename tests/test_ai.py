@@ -99,3 +99,17 @@ def test_resolve_editorial_dateline_none_when_location_missing():
 
 def test_resolve_editorial_dateline_none_when_date_missing():
     assert resolve_editorial_dateline(EDINBURGH, None) is None
+
+
+def test_resolve_location_completes_partial_known_location_from_guess():
+    meta = ImageMetadata(iptc_city="Kirkcaldy")
+    guess = Location(city="kirkcaldy", province_state="Scotland", country="UK")
+    assert resolve_location(meta, guess) == Location(
+        city="Kirkcaldy", province_state="Scotland", country="UK"
+    )
+
+
+def test_resolve_location_ignores_guess_for_a_different_city():
+    meta = ImageMetadata(iptc_city="Kirkcaldy")
+    guess = Location(city="Edinburgh", country="UK")
+    assert resolve_location(meta, guess) == Location(city="Kirkcaldy")

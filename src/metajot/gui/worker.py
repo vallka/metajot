@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 
 from PySide6.QtCore import QThread, Signal
 
@@ -18,7 +19,10 @@ class ProcessingWorker(QThread):
     image_failed = Signal(int, str)
     finished_all = Signal()
 
-    def __init__(self, jobs: list[tuple[int, Path]]):
+    def __init__(self, jobs: list[tuple[int, Path, Optional[ImageMetadata]]]):
+        """Each job is (index, path, context): context is the metadata to
+        give the AI instead of what's in the file - e.g. unsaved edits made
+        in the GUI - or None to read it from the file."""
         super().__init__()
         self.jobs = jobs
         self.stop_requested = False
@@ -27,12 +31,12 @@ class ProcessingWorker(QThread):
         self.stop_requested = True
 
     def run(self) -> None:
-        for index, path in self.jobs:
+        for index, path, context in self.jobs:
             if self.stop_requested:
                 break
             self.image_started.emit(index)
             try:
-                current_meta: ImageMetadata = read_metadata(path)
+                current_meta: ImageMetadata = context or read_metadata(path)
                 ai_data: AIResponse = generate_metadata(path, current_meta)
                 self.image_done.emit(index, current_meta, ai_data)
             except Exception as e:

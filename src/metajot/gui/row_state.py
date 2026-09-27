@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
 
@@ -30,13 +30,15 @@ class RowState:
     shutterstock_categories: list[str] = field(default_factory=list)
     status: str = "Pending"
     # Status to show when there are no unsaved changes ("Pending", "Done",
-    # "Written").
+    # "Written", "Pending (edits saved)").
     clean_status: str = "Pending"
     # Has MetaJot metadata (on disk from a previous run, or freshly
     # generated) - i.e. categories etc. are meaningful enough to export.
     processed: bool = False
     # Has AI-generated values not yet written to the file.
     dirty: bool = False
+    # Has manual edits (from the details dialog) not yet written to the file.
+    edited: bool = False
     # The editorial flag as last read from / written to the file, to tell
     # whether the Editorial checkbox has an unsaved change.
     saved_editorial: bool = False
@@ -61,17 +63,41 @@ class RowState:
     def editorial(self) -> bool:
         return _is_checked(self.editorial_item)
 
+    def set_editorial(self, editorial: bool) -> None:
+        """Ticks/unticks the list's Editorial checkbox, which the main window
+        reacts to like a click (status, header, buttons)."""
+        if self.editorial_item:
+            self.editorial_item.setCheckState(
+                Qt.CheckState.Checked if editorial else Qt.CheckState.Unchecked
+            )
+
     @property
     def editorial_changed(self) -> bool:
         return self.editorial != self.saved_editorial
 
     @property
     def has_unsaved_changes(self) -> bool:
-        return self.dirty or self.editorial_changed
+        return self.dirty or self.edited or self.editorial_changed
 
     @property
     def selected_for_processing(self) -> bool:
         return _is_checked(self.process_item)
+
+    def context_metadata(self) -> ImageMetadata:
+        """The file's metadata with this row's current values (including
+        unsaved edits) applied - what the AI should see as context."""
+        location = self.location or Location()
+        return replace(
+            self.current_meta or ImageMetadata(),
+            title=self.title or None,
+            description=self.description or None,
+            keywords=list(self.keywords),
+            iptc_city=location.city,
+            iptc_province_state=location.province_state,
+            iptc_country=location.country,
+            adobe_category_id=self.adobe_category_id,
+            shutterstock_categories=list(self.shutterstock_categories),
+        )
 
     def set_selected_for_processing(self, selected: bool) -> None:
         if self.process_item:

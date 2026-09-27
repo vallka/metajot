@@ -283,8 +283,24 @@ def resolve_location(
     """Resolves a photo's location: the location already embedded in the
     file and GPS reverse-geocoding (both deterministic) take priority over
     the AI's best-effort guess from keywords/visual context
-    (AIResponse.location_guess())."""
-    return resolve_deterministic_location(current_meta) or location_guess
+    (AIResponse.location_guess()). A partial known location (e.g. a city
+    typed in without a country) is completed from the guess, as long as the
+    guess is about the same city."""
+    known = resolve_deterministic_location(current_meta)
+    if not known or not location_guess:
+        return known or location_guess
+    same_place = (
+        not known.city
+        or not location_guess.city
+        or known.city.strip().lower() == location_guess.city.strip().lower()
+    )
+    if not same_place:
+        return known
+    return Location(
+        city=known.city or location_guess.city,
+        province_state=known.province_state or location_guess.province_state,
+        country=known.country or location_guess.country,
+    )
 
 
 def resolve_editorial_dateline(

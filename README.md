@@ -45,7 +45,10 @@ This opens the desktop window. The workflow has three separate steps:
 1. **Select Folder...** (or pick one from **Open Recent**) and click **Process with AI** to generate titles, descriptions,
    keywords, categories and a location for the photos ticked in the **Process** column
    (pre-ticked for photos MetaJot hasn't processed yet; **Cancel** stops after the current
-   photo). Click a thumbnail to see a photo's full metadata; click a column header to sort.
+   photo). Click a thumbnail to see and edit a photo's metadata (title, description,
+   keywords, location, categories); click a column header to sort. Edits made before
+   processing - e.g. correcting a place name or adding a landmark to the keywords - are given
+   to the AI as context; edits made after processing are kept as they are.
    The checkbox in the Process and Editorial column headers ticks/unticks all rows.
 2. **Write Metadata** saves the generated metadata into the photo files (IPTC, mirrored to EXIF/XMP),
    including the location in the standard City / State-Province / Country fields, and the

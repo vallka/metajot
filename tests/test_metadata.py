@@ -207,3 +207,32 @@ def test_write_editorial_flag_only_touches_the_flag(image_copy):
     assert after.processed_at is None
     assert after.title == before.title
     assert after.keywords == before.keywords
+
+
+def test_write_metadata_without_marking_processed(image_copy):
+    # Manual edits to a photo the AI hasn't processed yet must not make it
+    # look processed when the folder is reopened.
+    ok = write_metadata(image_copy, "T", "D", ["k"], mark_processed=False)
+    assert ok is True
+    after = read_metadata(image_copy)
+    assert after.title == "T"
+    assert after.processed_at is None
+
+
+def test_write_metadata_without_marking_keeps_existing_marker(image_copy):
+    write_metadata(image_copy, "T", "D", ["k"])
+    stamped = read_metadata(image_copy).processed_at
+    write_metadata(image_copy, "T2", "D2", ["k2"], mark_processed=False)
+    assert read_metadata(image_copy).processed_at == stamped
+
+
+def test_read_metadata_treats_blank_description_as_empty(image_copy):
+    # Capture One exports an empty description as a run of spaces.
+    iptc = IPTCInfo(image_copy, force=True)
+    iptc["caption/abstract"] = b" " * 31
+    iptc["keywords"] = [b"Fife", b"  ", b" Kirkcaldy "]
+    iptc.save(options=["overwrite"])
+
+    meta = read_metadata(image_copy)
+    assert meta.description is None
+    assert meta.keywords == ["Fife", "Kirkcaldy"]

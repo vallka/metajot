@@ -268,12 +268,15 @@ def build_updated_xmp(
     processed_at: Optional[str] = None,
     location: Optional[Location] = None,
     editorial: Optional[bool] = None,
+    mark_processed: bool = True,
 ) -> str:
     """Returns an XMP packet with dc:title/dc:description/dc:subject set to the
     given values, preserving every other property already in existing_xml.
     Also stamps metajot:ProcessedAt (current UTC time by default) as an
     unambiguous "this file was processed by MetaJot" marker, independent of
-    whatever category data happens to be filled in. If a non-empty location
+    whatever category data happens to be filled in - unless mark_processed
+    is False (e.g. saving manual edits to a photo the AI hasn't processed
+    yet), which leaves any existing marker as it was. If a non-empty location
     is given, photoshop:City/State/Country are set to it too (empty parts
     are removed); otherwise they're left as they were. Likewise
     metajot:Editorial is only set if editorial isn't None."""
@@ -287,10 +290,11 @@ def build_updated_xmp(
             _set_simple(desc, NS_PHOTOSHOP, tag, value)
     if editorial is not None:
         _set_editorial(desc, editorial)
-    desc.set(
-        _qn(NS_METAJOT, PROCESSED_AT_TAG),
-        processed_at or datetime.now(timezone.utc).isoformat(),
-    )
+    if mark_processed:
+        desc.set(
+            _qn(NS_METAJOT, PROCESSED_AT_TAG),
+            processed_at or datetime.now(timezone.utc).isoformat(),
+        )
     return _serialize(root)
 
 
@@ -339,12 +343,13 @@ def write_xmp_metadata(
     keywords: List[str],
     location: Optional[Location] = None,
     editorial: Optional[bool] = None,
+    mark_processed: bool = True,
 ) -> bool:
     """Writes title/description/keywords into the JPEG's XMP dc:title,
     dc:description and dc:subject properties, creating the XMP packet if the
     file doesn't have one yet. Leaves every other XMP property untouched.
-    Also stamps a metajot:ProcessedAt marker and, if given, the location and
-    editorial flag (see build_updated_xmp)."""
+    Also stamps a metajot:ProcessedAt marker (unless mark_processed is False)
+    and, if given, the location and editorial flag (see build_updated_xmp)."""
     return _replace_xmp_packet(
         image_path,
         lambda existing_xml: build_updated_xmp(
@@ -354,6 +359,7 @@ def write_xmp_metadata(
             keywords,
             location=location,
             editorial=editorial,
+            mark_processed=mark_processed,
         ),
     )
 

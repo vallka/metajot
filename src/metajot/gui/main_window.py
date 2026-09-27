@@ -80,6 +80,7 @@ SPINNER_INTERVAL_MS = 80
 
 STATUS_GENERATED = "Generated (unsaved)"
 STATUS_EDITORIAL_CHANGED = "Editorial changed (unsaved)"
+STATUS_EDITED = "Edited (unsaved)"
 
 
 def _checkbox_item(checked: bool, tooltip: str) -> SortableItem:
@@ -360,9 +361,25 @@ class MainWindow(QMainWindow):
             self._open_details(row)
 
     def _open_details(self, table_row: int) -> None:
-        state = self._state_at(table_row)
-        if state:
-            DetailDialog(state, self).exec()
+        if not self._state_at(table_row):
+            return
+        # Previous/Next in the dialog follow the list's current sort order.
+        states = [self._state_at(row) for row in range(self.table.rowCount())]
+        # Read-only while the AI runs, so an edit can't race with (and be
+        # silently overwritten by) that photo's results.
+        DetailDialog(
+            states,
+            table_row,
+            self,
+            editable=self.worker is None,
+            on_saved=self._on_details_saved,
+        ).exec()
+
+    def _on_details_saved(self, state: RowState) -> None:
+        state.edited = True
+        state.title_item.setToolTip(state.title)
+        self._refresh_status(state)
+        self._update_buttons()
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         if self._populating or item.column() not in CHECKBOX_COLUMNS:
@@ -403,7 +420,10 @@ class MainWindow(QMainWindow):
 
     def _refresh_status(self, state: RowState) -> None:
         if state.dirty:
+            # Edits on top of unsaved AI output are still just "unsaved".
             state.set_status(STATUS_GENERATED)
+        elif state.edited:
+            state.set_status(STATUS_EDITED)
         elif state.editorial_changed:
             state.set_status(STATUS_EDITORIAL_CHANGED)
         else:
@@ -456,9 +476,32 @@ class MainWindow(QMainWindow):
             index = self.table.item(row, COL_PHOTO).data(ROW_INDEX_ROLE)
             state = self.rows[index]
             if state.selected_for_processing:
-                jobs.append((index, state.path))
+                # Unsaved edits are given to the AI instead of what's in
+                # the file, so e.g. corrected keywords count straight away.
+                context = state.context_metadata() if state.edited else None
+                jobs.append((index, state.path, context))
         if not jobs:
             return
+
+        # Edits made after an AI run are only context for a new run - its
+        # title/description/keywords/categories replace them.
+        overwritten = [
+            self.rows[index].path.name
+            for index, _, _ in jobs
+            if self.rows[index].edited and self.rows[index].processed
+        ]
+        if overwritten:
+            answer = QMessageBox.question(
+                self,
+                "Replace manual edits?",
+                f"{len(overwritten)} photo(s) have manual edits that the AI "
+                "will use as context but replace with its own title, "
+                "description, keywords and categories:\n"
+                + "\n".join(overwritten)
+                + "\n\nProcess them anyway?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
 
         self._job_count = len(jobs)
         self._started_count = 0
@@ -513,6 +556,9 @@ class MainWindow(QMainWindow):
             )
         state.processed = True
         state.dirty = True
+        # Any manual edits were given to the AI as context and are now
+        # superseded by (or, for the location, kept in) its results.
+        state.edited = False
         self._refresh_status(state)
         # Done - a re-run shouldn't redo it unless it's ticked again.
         state.set_selected_for_processing(False)
@@ -556,7 +602,7 @@ class MainWindow(QMainWindow):
         written = 0
         failures: list[str] = []
         for state in self.rows:
-            if state.dirty:
+            if state.dirty or state.edited:
                 success = write_metadata(
                     state.path,
                     state.title,
@@ -566,6 +612,9 @@ class MainWindow(QMainWindow):
                     state.shutterstock_categories,
                     location=state.location,
                     editorial=state.editorial,
+                    # Manual edits alone don't make a photo "processed" -
+                    # it should still come up ticked for the AI next time.
+                    mark_processed=state.processed,
                 )
             elif state.editorial_changed:
                 # Only the flag changed - don't rewrite (or, for a photo
@@ -576,9 +625,12 @@ class MainWindow(QMainWindow):
 
             if success:
                 written += 1
-                if state.dirty:
-                    state.clean_status = "Written"
+                if state.dirty or state.edited:
+                    state.clean_status = (
+                        "Written" if state.processed else "Pending (edits saved)"
+                    )
                 state.dirty = False
+                state.edited = False
                 state.saved_editorial = state.editorial
                 self._refresh_status(state)
             else:

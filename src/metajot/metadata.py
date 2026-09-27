@@ -83,18 +83,19 @@ def _exif_datetime_to_iptc_date(exif_datetime: str) -> Optional[str]:
 
 
 def decode_iptc_value(value) -> Optional[str]:
-    """Helper to decode IPTC byte values to string."""
+    """Helper to decode IPTC byte values to string. Surrounding whitespace is
+    stripped and blank values become None - e.g. Capture One exports an
+    empty description as a run of spaces."""
     if not value:
         return None
     if isinstance(value, bytes):
         try:
-            return value.decode("utf-8")
+            text = value.decode("utf-8")
         except UnicodeDecodeError:
-            try:
-                return value.decode("latin-1")
-            except UnicodeDecodeError:
-                return str(value)
-    return str(value)
+            text = value.decode("latin-1")
+    else:
+        text = str(value)
+    return text.strip() or None
 
 
 def read_metadata(image_path: Path) -> ImageMetadata:
@@ -112,7 +113,9 @@ def read_metadata(image_path: Path) -> ImageMetadata:
             meta.description = decode_iptc_value(desc_bytes)
 
         if iptc["keywords"]:
-            meta.keywords = [decode_iptc_value(k) for k in iptc["keywords"] if k]
+            meta.keywords = [
+                decoded for k in iptc["keywords"] if (decoded := decode_iptc_value(k))
+            ]
 
         if category_bytes := iptc["category"]:
             meta.adobe_category_id = decode_iptc_value(category_bytes)
@@ -206,12 +209,16 @@ def write_metadata(
     shutterstock_categories: Optional[List[str]] = None,
     location: Optional[Location] = None,
     editorial: Optional[bool] = None,
+    mark_processed: bool = True,
 ) -> bool:
     """Writes new IPTC Title, Description, Keywords, and categories to the
     image. If a non-empty location is given, it's written to the IPTC
     City/Province-State/Country fields (and XMP) too, with empty parts
     cleared; otherwise the file's existing location fields are left as-is.
-    The editorial flag, if given, is saved in XMP (metajot:Editorial)."""
+    The editorial flag, if given, is saved in XMP (metajot:Editorial).
+    mark_processed=False saves without stamping the XMP metajot:ProcessedAt
+    marker - for manual edits to a photo the AI hasn't processed yet, which
+    should still show as unprocessed when the folder is reopened."""
     try:
         iptc = IPTCInfo(image_path, force=True)
 
@@ -279,6 +286,7 @@ def write_metadata(
             keywords,
             location=location,
             editorial=editorial,
+            mark_processed=mark_processed,
         )
     except Exception as e:
         print(f"Error writing metadata to {image_path}: {e}")
