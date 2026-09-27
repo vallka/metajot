@@ -195,7 +195,8 @@ def generate_metadata(image_path: Path, current_meta: ImageMetadata) -> AIRespon
     """
     if not settings.ai.api_key:
         raise ValueError(
-            "OpenAI API key is missing. Set it in config.toml or via the OPENAI_API_KEY env var."
+            "OpenAI API key is missing. Set it in Settings, or via the "
+            "OPENAI_API_KEY env var."
         )
 
     client = OpenAI(

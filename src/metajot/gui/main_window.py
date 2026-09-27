@@ -9,11 +9,13 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +27,7 @@ from metajot.ai import (
     resolve_editorial_dateline,
     resolve_location,
 )
+from metajot.config import load_state, save_state, settings
 from metajot.exporter import (
     ExportRecord,
     export_adobe_stock_csv,
@@ -32,6 +35,7 @@ from metajot.exporter import (
 )
 from metajot.gui.detail_dialog import DetailDialog
 from metajot.gui.row_state import RowState, load_thumbnail
+from metajot.gui.settings_dialog import SettingsDialog
 from metajot.gui.widgets import (
     SORT_KEY_ROLE,
     CheckableHeader,
@@ -48,6 +52,7 @@ from metajot.metadata import (
 )
 
 THUMBNAIL_SIZE = 192
+MAX_RECENT_FOLDERS = 10
 
 COL_PROCESS = 0
 COL_PHOTO = 1
@@ -114,6 +119,12 @@ class MainWindow(QMainWindow):
         top_bar = QHBoxLayout()
         self.select_btn = QPushButton("Select Folder...")
         self.select_btn.clicked.connect(self.select_folder)
+        self.recent_btn = QToolButton()
+        self.recent_btn.setText("Open Recent")
+        self.recent_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.recent_menu = QMenu(self.recent_btn)
+        self.recent_menu.aboutToShow.connect(self._populate_recent_menu)
+        self.recent_btn.setMenu(self.recent_menu)
         self.folder_label = QLabel("No folder selected")
         self.process_btn = QPushButton("Process with AI")
         self.process_btn.setToolTip(
@@ -136,12 +147,17 @@ class MainWindow(QMainWindow):
             "photos in this folder."
         )
         self.export_btn.clicked.connect(self.export_csvs)
+        self.settings_btn = QPushButton("Settings...")
+        self.settings_btn.setToolTip("OpenAI API key, model and other settings.")
+        self.settings_btn.clicked.connect(self.open_settings)
         top_bar.addWidget(self.select_btn)
+        top_bar.addWidget(self.recent_btn)
         top_bar.addWidget(self.folder_label, 1)
         top_bar.addWidget(self.process_btn)
         top_bar.addWidget(self.cancel_btn)
         top_bar.addWidget(self.write_btn)
         top_bar.addWidget(self.export_btn)
+        top_bar.addWidget(self.settings_btn)
         layout.addLayout(top_bar)
 
         activity_bar = QHBoxLayout()
@@ -200,16 +216,70 @@ class MainWindow(QMainWindow):
         self._update_buttons()
 
     def select_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Select photo folder")
-        if not folder:
+        # Start browsing where the last opened folder was.
+        start_dir = ""
+        if recent := self._recent_folders():
+            start_dir = str(recent[0])
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select photo folder", start_dir
+        )
+        if folder:
+            self.open_folder(Path(folder))
+
+    def open_folder(self, folder: Path) -> None:
+        if not folder.is_dir():
+            QMessageBox.warning(self, "Folder not found", f"{folder} no longer exists.")
             return
-        self.directory = Path(folder)
-        self.folder_label.setText(str(self.directory))
+        unsaved = sum(1 for r in self.rows if r.has_unsaved_changes)
+        if unsaved:
+            answer = QMessageBox.question(
+                self,
+                "Unsaved changes",
+                f"{unsaved} photo(s) in the current folder have changes not "
+                "yet written to the files. Discard them and open another "
+                "folder?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        self.directory = folder
+        self.folder_label.setText(str(folder))
+        self._remember_folder(folder)
 
         images = sorted(
-            p for p in self.directory.iterdir() if p.suffix.lower() in (".jpg", ".jpeg")
+            p for p in folder.iterdir() if p.suffix.lower() in (".jpg", ".jpeg")
         )
         self._load_images(images)
+
+    @staticmethod
+    def _recent_folders() -> list[Path]:
+        """Recently opened folders, most recent first, skipping any that
+        no longer exist."""
+        folders = [Path(f) for f in load_state().get("recent_folders", [])]
+        return [f for f in folders if f.is_dir()]
+
+    def _remember_folder(self, folder: Path) -> None:
+        folders = [f for f in self._recent_folders() if f != folder]
+        folders.insert(0, folder)
+        save_state(recent_folders=[str(f) for f in folders[:MAX_RECENT_FOLDERS]])
+
+    def _populate_recent_menu(self) -> None:
+        self.recent_menu.clear()
+        folders = self._recent_folders()
+        if not folders:
+            self.recent_menu.addAction("(no recent folders)").setEnabled(False)
+            return
+        for folder in folders:
+            action = self.recent_menu.addAction(str(folder))
+            action.triggered.connect(lambda _=False, f=folder: self.open_folder(f))
+        self.recent_menu.addSeparator()
+        self.recent_menu.addAction("Clear list").triggered.connect(
+            lambda: save_state(recent_folders=[])
+        )
+
+    def open_settings(self) -> bool:
+        """Opens the Settings dialog; returns whether it was saved."""
+        return SettingsDialog(self).exec() == SettingsDialog.DialogCode.Accepted
 
     def _load_images(self, images: list[Path]) -> None:
         self._populating = True
@@ -346,6 +416,8 @@ class MainWindow(QMainWindow):
             f"Process with AI ({selected})" if selected else "Process with AI"
         )
         self.select_btn.setEnabled(not busy)
+        self.recent_btn.setEnabled(not busy)
+        self.settings_btn.setEnabled(not busy)
         self.process_btn.setEnabled(selected > 0 and not busy)
         self.cancel_btn.setVisible(busy)
         self.write_btn.setEnabled(
@@ -366,6 +438,18 @@ class MainWindow(QMainWindow):
         self._render_activity()
 
     def start_processing(self) -> None:
+        if not settings.ai.api_key:
+            answer = QMessageBox.question(
+                self,
+                "No API key",
+                "An OpenAI API key is needed to process photos. Open Settings "
+                "to enter one?",
+            )
+            if answer != QMessageBox.StandardButton.Yes or not self.open_settings():
+                return
+            if not settings.ai.api_key:
+                return
+
         # Process in the order currently shown in the table.
         jobs = []
         for row in range(self.table.rowCount()):

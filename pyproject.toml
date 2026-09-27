@@ -8,10 +8,12 @@ requires-python = ">=3.12"
 dependencies = [
     "exif>=1.6.1",
     "iptcinfo3>=2.3.0",
+    "keyring>=25.7.0",
     "openai>=2.26.0",
     "pillow>=11.0.0",
     "pydantic>=2.12.5",
     "pyside6>=6.8.0",
+    "tomli-w>=1.2.0",
 ]
 
 [project.scripts]

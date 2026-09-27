@@ -25,19 +25,16 @@ Adobe Stock / Shutterstock compatible `.csv` upload sheets.
    uv sync
    ```
 
-3. **Configure the AI provider.** Copy the example config and fill in your model/API key:
+3. **Enter your OpenAI API key** in the app: click **Settings...**, paste the key, and
+   optionally click **Test**. The key is stored in the operating system's credential store
+   (Windows Credential Manager / macOS Keychain), not in a file. The other settings (model,
+   base URL, max image size) are saved to a per-user `config.toml`
+   (`%LOCALAPPDATA%\MetaJot\config.toml` on Windows).
 
-   ```bash
-   cp config.toml.example config.toml
-   ```
-
-   `config.toml` is gitignored since it can hold a live API key. Prefer setting the
-   `OPENAI_API_KEY` environment variable over putting the key in `config.toml` — the env var
-   takes priority and keeps the key off disk.
+   Alternatively, set the `OPENAI_API_KEY` environment variable, which takes priority.
 
 ## Usage
 
-Run from the project root (see [Gotchas](#gotchas) below):
 
 ```bash
 uv run metajot
@@ -45,7 +42,7 @@ uv run metajot
 
 This opens the desktop window. The workflow has three separate steps:
 
-1. **Select Folder...** and click **Process with AI** to generate titles, descriptions,
+1. **Select Folder...** (or pick one from **Open Recent**) and click **Process with AI** to generate titles, descriptions,
    keywords, categories and a location for the photos ticked in the **Process** column
    (pre-ticked for photos MetaJot hasn't processed yet; **Cancel** stops after the current
    photo). Click a thumbnail to see a photo's full metadata; click a column header to sort.
@@ -74,9 +71,8 @@ uv run ruff check --fix src tests
 
 ## Gotchas
 
-- `config.toml` is loaded relative to the **current working directory at runtime**, not the
-  package location — `uv run metajot` must be invoked from the project root (where
-  `config.toml` lives), or the AI calls will fail with a missing API key. Same applies if
-  installed as a `uv tool`; only the `OPENAI_API_KEY` env var path is cwd-independent.
+- A `config.toml` in the current working directory (the original setup, see
+  `config.toml.example`) is still read, as a fallback below the per-user settings file, so
+  its values only apply when the app is started from that folder.
 - `tests/fixtures/` contains real sample `.jpg` photos used for manual end-to-end verification —
   processing that folder mutates those files' embedded metadata in place.

@@ -17,7 +17,7 @@ This project uses `uv` for environment and dependency management (Python >=3.12,
 
 ```bash
 uv sync                          # create/update .venv from uv.lock
-uv run metajot                   # launch the GUI — must be invoked from the project root (see Gotchas)
+uv run metajot                   # launch the GUI
 uv run pytest -q                 # run the test suite
 uv run pytest tests/test_config.py::test_config_loads_defaults  # run a single test
 uv run ruff check src tests      # lint
@@ -61,23 +61,29 @@ the table plus what's already embedded in the files, so a folder reopened later 
    Illustration, Mature Content, Editorial) for all processed photos in the folder. Editorial rows
    get an AP-style dateline built from the row's location and the photo's date.
 
-**[config.py](src/metajot/config.py)** loads `config.toml` (`[ai]` model/base_url/api_key/
-max_image_dimension, `[prompts]` system_prompt) once at import time into a module-level `settings`
-singleton, used by `ai.py`. `OPENAI_API_KEY` env var takes priority over `config.toml`'s `api_key`
-so the key doesn't need to live on disk.
+**[config.py](src/metajot/config.py)** builds a module-level `settings` singleton at import time,
+used by `ai.py`, layering: built-in defaults (the default system prompt ships in
+[data/system_prompt.txt](src/metajot/data/system_prompt.txt)) < `./config.toml` (legacy,
+cwd-relative) < the per-user `config.toml` (`user_config_dir()`, e.g. `%LOCALAPPDATA%\MetaJot`).
+The API key comes from `OPENAI_API_KEY` > the OS credential store (`keyring`) > `api_key` in a
+config file. The GUI's `SettingsDialog` ([gui/settings_dialog.py](src/metajot/gui/settings_dialog.py))
+saves the key via `keyring` and the rest via `save_ai_settings()` (`tomli-w`), then calls
+`reload_settings()`, which updates `settings` in place. UI state (recent folders) goes in
+`state.json` next to the user config. `METAJOT_CONFIG_DIR` overrides the user config folder
+(tests use it, together with an in-memory keyring backend).
 
 ### Gotchas
 
-- `CONFIG_PATH` in `config.py` is `Path("config.toml")` — resolved relative to the **current
-  working directory at runtime**, not the package location. `uv run metajot` must be invoked from
-  the project root (where `config.toml` lives) or the AI calls will fail with a missing API key.
-  Same applies if installed as a `uv tool` — only the `OPENAI_API_KEY` env var path is cwd-independent.
+- `PROJECT_CONFIG_PATH` (`./config.toml`) is resolved against the **current working directory**,
+  so it only applies when the app is started from the project root. Settings from the dialog
+  live in the per-user config and don't depend on the cwd.
 - `iptcinfo3`'s `IPTCInfo.save()` writes the new data directly back to the original file path,
   moving the *previous* version to `<filename>~` as a backup by default (the reverse of what the
   name suggests at a glance). `write_metadata()` passes `options=["overwrite"]` to skip that
   backup entirely, since the old data isn't needed and the `~` files were just clutter.
-- `config.toml` and `.env` are gitignored since `config.toml` holds a live API key in this
-  environment; don't suggest committing them.
+- `config.toml` and `.env` are gitignored since `config.toml` can hold a live API key; don't
+  suggest committing them. Never write the API key to a file from code - it belongs in the
+  credential store.
 - `tests/fixtures/` contains real sample `.jpg` photos used for manual end-to-end verification
   (per the original implementation plan) — processing that folder mutates those
   files' embedded metadata in place.
