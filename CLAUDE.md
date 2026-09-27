@@ -30,7 +30,11 @@ There is no separate build step (pure Python, hatchling backend).
 
 Entry point is `main()` in [src/metajot/gui/app.py](src/metajot/gui/app.py), which opens
 `MainWindow` ([gui/main_window.py](src/metajot/gui/main_window.py)). AI generation runs off the
-UI thread in `ProcessingWorker` ([gui/worker.py](src/metajot/gui/worker.py)). Writing metadata
+UI thread in `ProcessingWorker` ([gui/worker.py](src/metajot/gui/worker.py)), which can be
+cancelled between photos. The list view is read-only apart from the Editorial checkboxes and
+sortable, so each photo's data lives in a `RowState` ([gui/row_state.py](src/metajot/gui/row_state.py)),
+not in table cells; clicking a thumbnail opens `DetailDialog`
+([gui/detail_dialog.py](src/metajot/gui/detail_dialog.py)) with the full metadata. Writing metadata
 (**Write Metadata**) and exporting CSVs (**Export CSVs**) are separate steps: export works from
 the table plus what's already embedded in the files, so a folder reopened later can be exported
 (e.g. with Editorial ticked) without re-running the AI. Pipeline:

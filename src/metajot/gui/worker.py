@@ -7,7 +7,9 @@ from metajot.metadata import ImageMetadata, read_metadata
 
 
 class ProcessingWorker(QThread):
-    """Runs AI metadata generation for a batch of images off the UI thread."""
+    """Runs AI metadata generation for a batch of images off the UI thread.
+    stop() takes effect between photos - an in-flight AI request for the
+    current photo is allowed to finish."""
 
     image_started = Signal(int)
     image_done = Signal(int, object, object)  # row, ImageMetadata, AIResponse
@@ -17,14 +19,14 @@ class ProcessingWorker(QThread):
     def __init__(self, image_paths: list[Path]):
         super().__init__()
         self.image_paths = image_paths
-        self._stop_requested = False
+        self.stop_requested = False
 
     def stop(self) -> None:
-        self._stop_requested = True
+        self.stop_requested = True
 
     def run(self) -> None:
         for row, path in enumerate(self.image_paths):
-            if self._stop_requested:
+            if self.stop_requested:
                 break
             self.image_started.emit(row)
             try:

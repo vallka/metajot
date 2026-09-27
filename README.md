@@ -46,8 +46,9 @@ uv run metajot
 This opens the desktop window. The workflow has three separate steps:
 
 1. **Select Folder...** and click **Process with AI** to generate titles, descriptions,
-   keywords, categories and a location for each photo. Review and edit them in the table.
-2. **Write Metadata** saves the table into the photo files (IPTC, mirrored to EXIF/XMP),
+   keywords, categories and a location for each photo (**Cancel** stops after the current
+   photo). Click a thumbnail to see a photo's full metadata; click a column header to sort.
+2. **Write Metadata** saves the generated metadata into the photo files (IPTC, mirrored to EXIF/XMP),
    including the location in the standard City / State-Province / Country fields.
 3. **Export CSVs** generates `adobe_stock.csv` / `shutterstock.csv` in that folder.
 

@@ -1,13 +1,9 @@
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QImageReader, QPixmap
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
-    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -24,9 +20,7 @@ from PySide6.QtWidgets import (
 
 from metajot.ai import (
     ADOBE_CATEGORY_IDS,
-    AdobeStockCategory,
     AIResponse,
-    ShutterstockCategory,
     build_shutterstock_description,
     resolve_editorial_dateline,
     resolve_location,
@@ -36,8 +30,9 @@ from metajot.exporter import (
     export_adobe_stock_csv,
     export_shutterstock_csv,
 )
+from metajot.gui.detail_dialog import DetailDialog
+from metajot.gui.row_state import RowState, load_thumbnail
 from metajot.gui.worker import ProcessingWorker
-from metajot.location import Location
 from metajot.metadata import (
     ImageMetadata,
     read_metadata,
@@ -45,106 +40,76 @@ from metajot.metadata import (
     write_metadata,
 )
 
-THUMBNAIL_SIZE = 96
-NO_SECONDARY = "(none)"
+THUMBNAIL_SIZE = 192
 
 COL_THUMB = 0
 COL_FILENAME = 1
 COL_TITLE = 2
-COL_DESCRIPTION = 3
-COL_KEYWORDS = 4
-COL_CITY = 5
-COL_STATE = 6
-COL_COUNTRY = 7
-COL_ADOBE_CATEGORY = 8
-COL_SHUTTER_PRIMARY = 9
-COL_SHUTTER_SECONDARY = 10
-COL_EDITORIAL = 11
-COL_STATUS = 12
-COLUMN_COUNT = 13
+COL_EDITORIAL = 3
+COL_STATUS = 4
+COLUMN_COUNT = 5
 
-COLUMN_HEADERS = [
-    "",
-    "Filename",
-    "Title",
-    "Description",
-    "Keywords",
-    "City",
-    "State/Province",
-    "Country",
-    "Adobe Category",
-    "Shutterstock 1",
-    "Shutterstock 2",
-    "Editorial",
-    "Status",
-]
+COLUMN_HEADERS = ["", "Filename", "Title", "Editorial", "Status"]
 
-# Text columns whose edits are saved into the file by "Write Metadata".
-EDITABLE_TEXT_COLUMNS = {
-    COL_TITLE,
-    COL_DESCRIPTION,
-    COL_KEYWORDS,
-    COL_CITY,
-    COL_STATE,
-    COL_COUNTRY,
-}
+# Index into MainWindow.rows, stored on each row's filename item so a table
+# row can be mapped back to its RowState whatever the current sort order.
+ROW_INDEX_ROLE = Qt.ItemDataRole.UserRole
+# Explicit sort key for items whose display text isn't what should be sorted
+# on (the thumbnail, which has none).
+SORT_KEY_ROLE = Qt.ItemDataRole.UserRole + 1
 
-# Reverse of ai.ADOBE_CATEGORY_IDS, to map the numeric ID stored on disk back
-# to the category name the combo box displays.
-ADOBE_CATEGORY_NAMES_BY_ID = {str(v): k for k, v in ADOBE_CATEGORY_IDS.items()}
+SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+SPINNER_INTERVAL_MS = 80
 
 
-@dataclass
-class RowState:
-    path: Path
-    current_meta: Optional[ImageMetadata] = None
-    # Has MetaJot metadata (on disk from a previous run, or freshly
-    # generated) - i.e. categories etc. are meaningful enough to export.
-    processed: bool = False
-    # Has AI-generated values or user edits not yet written to the file.
-    dirty: bool = False
+class SortableItem(QTableWidgetItem):
+    """Sorts case-insensitively by text, by check state for checkbox items,
+    or by an explicit SORT_KEY_ROLE value if set."""
 
+    def _sort_key(self):
+        # Not flags() & ItemIsUserCheckable: that flag is on by default for
+        # every item, whereas only real checkbox items have a check state.
+        if self.data(Qt.ItemDataRole.CheckStateRole) is not None:
+            return self.checkState().value
+        key = self.data(SORT_KEY_ROLE)
+        return key if key is not None else self.text().lower()
 
-def load_thumbnail(path: Path, size: int = THUMBNAIL_SIZE) -> QPixmap:
-    """Decodes directly at thumbnail resolution instead of full size, since
-    these source JPEGs are commonly 10+ MB."""
-    reader = QImageReader(str(path))
-    reader.setAutoTransform(True)
-    original_size = reader.size()
-    if original_size.isValid():
-        scaled = original_size.scaled(
-            size, size, Qt.AspectRatioMode.KeepAspectRatio
-        )
-        reader.setScaledSize(scaled)
-    return QPixmap.fromImage(reader.read())
+    def __lt__(self, other: QTableWidgetItem) -> bool:
+        if isinstance(other, SortableItem):
+            return self._sort_key() < other._sort_key()
+        return super().__lt__(other)
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MetaJot")
-        self.resize(1500, 700)
+        self.resize(1100, 800)
 
         self.directory: Optional[Path] = None
         self.rows: list[RowState] = []
         self.worker: Optional[ProcessingWorker] = None
-        # Set while cells are filled programmatically, so only real user
-        # edits mark a row as modified.
-        self._populating = False
+        self._processed_count = 0
+        self._spinner_frame = 0
+        self._activity_text = ""
 
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
         top_bar = QHBoxLayout()
-        select_btn = QPushButton("Select Folder...")
-        select_btn.clicked.connect(self.select_folder)
+        self.select_btn = QPushButton("Select Folder...")
+        self.select_btn.clicked.connect(self.select_folder)
         self.folder_label = QLabel("No folder selected")
         self.process_btn = QPushButton("Process with AI")
         self.process_btn.clicked.connect(self.start_processing)
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setToolTip("Stop after the photo currently being processed.")
+        self.cancel_btn.clicked.connect(self.cancel_processing)
+        self.cancel_btn.setVisible(False)
         self.write_btn = QPushButton("Write Metadata")
         self.write_btn.setToolTip(
-            "Save the table's title, description, keywords, location and "
+            "Save the generated title, description, keywords, location and "
             "categories into the photo files."
         )
         self.write_btn.clicked.connect(self.write_metadata_clicked)
@@ -154,27 +119,47 @@ class MainWindow(QMainWindow):
             "photos in this folder."
         )
         self.export_btn.clicked.connect(self.export_csvs)
-        top_bar.addWidget(select_btn)
+        top_bar.addWidget(self.select_btn)
         top_bar.addWidget(self.folder_label, 1)
         top_bar.addWidget(self.process_btn)
+        top_bar.addWidget(self.cancel_btn)
         top_bar.addWidget(self.write_btn)
         top_bar.addWidget(self.export_btn)
         layout.addLayout(top_bar)
 
+        activity_bar = QHBoxLayout()
+        self.activity_label = QLabel()
         self.progress = QProgressBar()
+        self.progress.setFormat("%v / %m")
+        activity_bar.addWidget(self.activity_label, 1)
+        activity_bar.addWidget(self.progress, 1)
+        layout.addLayout(activity_bar)
+        self.activity_label.setVisible(False)
         self.progress.setVisible(False)
-        layout.addWidget(self.progress)
+
+        self.spinner_timer = QTimer(self)
+        self.spinner_timer.setInterval(SPINNER_INTERVAL_MS)
+        self.spinner_timer.timeout.connect(self._advance_spinner)
 
         self.table = QTableWidget(0, COLUMN_COUNT)
         self.table.setHorizontalHeaderLabels(COLUMN_HEADERS)
-        self.table.horizontalHeader().setSectionResizeMode(
-            COL_DESCRIPTION, QHeaderView.ResizeMode.Stretch
-        )
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
+        self.table.setIconSize(QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+        self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(THUMBNAIL_SIZE + 8)
-        self.table.itemChanged.connect(self._on_item_changed)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(COL_TITLE, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(COL_THUMB, THUMBNAIL_SIZE + 8)
+        self.table.setColumnWidth(COL_FILENAME, 220)
+        self.table.setColumnWidth(COL_EDITORIAL, 80)
+        self.table.setColumnWidth(COL_STATUS, 160)
+        self.table.cellClicked.connect(self._on_cell_clicked)
+        self.table.cellDoubleClicked.connect(
+            lambda row, _col: self._open_details(row)
+        )
         layout.addWidget(self.table)
 
         self._update_buttons()
@@ -192,145 +177,116 @@ class MainWindow(QMainWindow):
         self._load_images(images)
 
     def _load_images(self, images: list[Path]) -> None:
-        self._populating = True
-        self.rows = [RowState(path=p) for p in images]
+        # Rows must be inserted unsorted, or they'd move while being filled.
+        self.table.setSortingEnabled(False)
+        self.rows = []
         self.table.setRowCount(len(images))
 
-        for row, path in enumerate(images):
+        for index, path in enumerate(images):
             # read_metadata() is the single "master" place MetaJot's own
             # writer keeps IPTC/EXIF/XMP in sync through, so reopening a
             # processed folder shows exactly what was last written, however
             # it was written (title/description/keywords/location all come
             # from IPTC; the metajot:ProcessedAt marker comes from XMP).
-            existing_meta = read_metadata(path)
-            state = self.rows[row]
-            state.current_meta = existing_meta
-            state.processed = bool(existing_meta.processed_at)
-
-            thumb_label = QLabel()
-            thumb_label.setPixmap(load_thumbnail(path))
-            self.table.setCellWidget(row, COL_THUMB, thumb_label)
-            self.table.setItem(row, COL_FILENAME, self._readonly_item(path.name))
-            title_item = QTableWidgetItem(existing_meta.title or "")
-            self.table.setItem(row, COL_TITLE, title_item)
-            desc_item = QTableWidgetItem(existing_meta.description or "")
-            self.table.setItem(row, COL_DESCRIPTION, desc_item)
-            keywords_item = QTableWidgetItem(", ".join(existing_meta.keywords))
-            self.table.setItem(row, COL_KEYWORDS, keywords_item)
-
-            # Shows the embedded location, or one reverse-geocoded from GPS
-            # if there's none yet - the latter gets saved into the file on
-            # the next write.
-            self._set_location_cells(
-                row, resolve_deterministic_location(existing_meta)
+            meta = read_metadata(path)
+            state = RowState(
+                path=path,
+                current_meta=meta,
+                title=meta.title or "",
+                description=meta.description or "",
+                keywords=list(meta.keywords),
+                # The embedded location, or one reverse-geocoded from GPS if
+                # there's none yet - the latter gets saved on the next write.
+                location=resolve_deterministic_location(meta),
+                adobe_category_id=meta.adobe_category_id,
+                shutterstock_categories=list(meta.shutterstock_categories),
+                processed=bool(meta.processed_at),
+                status="Done" if meta.processed_at else "Pending",
             )
+            self.rows.append(state)
 
-            adobe_combo = self._make_adobe_combo(row)
-            adobe_id = existing_meta.adobe_category_id or ""
-            adobe_name = ADOBE_CATEGORY_NAMES_BY_ID.get(adobe_id)
-            if adobe_name:
-                adobe_combo.setCurrentText(adobe_name)
-            self.table.setCellWidget(row, COL_ADOBE_CATEGORY, adobe_combo)
+            thumb_item = SortableItem()
+            thumb_item.setData(
+                Qt.ItemDataRole.DecorationRole, load_thumbnail(path, THUMBNAIL_SIZE)
+            )
+            thumb_item.setData(SORT_KEY_ROLE, path.name.lower())
+            thumb_item.setToolTip("Click to view details")
+            self.table.setItem(index, COL_THUMB, thumb_item)
 
-            primary_combo = self._make_shutter_combo(row)
-            secondary_combo = self._make_shutter_combo(row, allow_none=True)
-            categories = existing_meta.shutterstock_categories
-            if categories:
-                primary_combo.setCurrentText(categories[0])
-            if len(categories) > 1:
-                secondary_combo.setCurrentText(categories[1])
-            self.table.setCellWidget(row, COL_SHUTTER_PRIMARY, primary_combo)
-            self.table.setCellWidget(row, COL_SHUTTER_SECONDARY, secondary_combo)
+            filename_item = SortableItem(path.name)
+            filename_item.setData(ROW_INDEX_ROLE, index)
+            self.table.setItem(index, COL_FILENAME, filename_item)
 
-            editorial_checkbox = self._make_editorial_checkbox()
-            self.table.setCellWidget(row, COL_EDITORIAL, editorial_checkbox)
+            state.title_item = SortableItem(state.title)
+            state.title_item.setToolTip(state.title)
+            self.table.setItem(index, COL_TITLE, state.title_item)
 
-            status = "Done" if state.processed else "Pending"
-            self.table.setItem(row, COL_STATUS, self._readonly_item(status))
+            state.editorial_item = SortableItem()
+            state.editorial_item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsSelectable
+                | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            state.editorial_item.setCheckState(Qt.CheckState.Unchecked)
+            state.editorial_item.setToolTip(
+                "Format the Shutterstock description as an editorial dateline "
+                '("City, State/Country - Month Day Year: Description") for '
+                "this photo when exporting CSVs."
+            )
+            self.table.setItem(index, COL_EDITORIAL, state.editorial_item)
 
-        self._populating = False
+            state.status_item = SortableItem(state.status)
+            self.table.setItem(index, COL_STATUS, state.status_item)
+
+        self.table.setSortingEnabled(True)
+        self.table.sortItems(COL_FILENAME, Qt.SortOrder.AscendingOrder)
         self._update_buttons()
 
-    def _set_location_cells(self, row: int, location: Optional[Location]) -> None:
-        location = location or Location()
-        for col, value in (
-            (COL_CITY, location.city),
-            (COL_STATE, location.province_state),
-            (COL_COUNTRY, location.country),
-        ):
-            self.table.setItem(row, col, QTableWidgetItem(value or ""))
+    def _state_at(self, table_row: int) -> Optional[RowState]:
+        item = self.table.item(table_row, COL_FILENAME)
+        if item is None:
+            return None
+        return self.rows[item.data(ROW_INDEX_ROLE)]
 
-    def _row_location(self, row: int) -> Location:
-        return Location(
-            city=self._cell_text(row, COL_CITY) or None,
-            province_state=self._cell_text(row, COL_STATE) or None,
-            country=self._cell_text(row, COL_COUNTRY) or None,
-        )
+    def _on_cell_clicked(self, row: int, col: int) -> None:
+        if col == COL_THUMB:
+            self._open_details(row)
 
-    def _cell_text(self, row: int, col: int) -> str:
-        item = self.table.item(row, col)
-        return item.text().strip() if item else ""
-
-    def _row_keywords(self, row: int) -> list[str]:
-        keywords = self._cell_text(row, COL_KEYWORDS).split(",")
-        return [k.strip() for k in keywords if k.strip()]
-
-    def _set_status(self, row: int, text: str) -> None:
-        self.table.item(row, COL_STATUS).setText(text)
-
-    def _on_item_changed(self, item: QTableWidgetItem) -> None:
-        if item.column() in EDITABLE_TEXT_COLUMNS:
-            self._mark_dirty(item.row())
-
-    def _mark_dirty(self, row: int) -> None:
-        if self._populating or row >= len(self.rows):
-            return
-        self.rows[row].dirty = True
-        self._set_status(row, "Modified")
-        self._update_buttons()
+    def _open_details(self, table_row: int) -> None:
+        state = self._state_at(table_row)
+        if state:
+            DetailDialog(state, self).exec()
 
     def _update_buttons(self) -> None:
         busy = self.worker is not None
+        self.select_btn.setEnabled(not busy)
         self.process_btn.setEnabled(bool(self.rows) and not busy)
+        self.cancel_btn.setVisible(busy)
         self.write_btn.setEnabled(any(r.dirty for r in self.rows) and not busy)
         self.export_btn.setEnabled(any(r.processed for r in self.rows) and not busy)
 
-    @staticmethod
-    def _readonly_item(text: str) -> QTableWidgetItem:
-        item = QTableWidgetItem(text)
-        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        return item
+    def _set_activity(self, text: str) -> None:
+        self._activity_text = text
+        self._render_activity()
 
-    def _make_adobe_combo(self, row: int) -> QComboBox:
-        combo = QComboBox()
-        combo.addItems([c.value for c in AdobeStockCategory])
-        combo.currentIndexChanged.connect(lambda _=None, r=row: self._mark_dirty(r))
-        return combo
+    def _render_activity(self) -> None:
+        spinner = SPINNER_FRAMES[self._spinner_frame]
+        self.activity_label.setText(f"{spinner}  {self._activity_text}")
 
-    def _make_shutter_combo(self, row: int, allow_none: bool = False) -> QComboBox:
-        combo = QComboBox()
-        if allow_none:
-            combo.addItem(NO_SECONDARY)
-        combo.addItems([c.value for c in ShutterstockCategory])
-        combo.currentIndexChanged.connect(lambda _=None, r=row: self._mark_dirty(r))
-        return combo
-
-    @staticmethod
-    def _make_editorial_checkbox() -> QCheckBox:
-        checkbox = QCheckBox()
-        checkbox.setToolTip(
-            "Format the Shutterstock description as an editorial dateline "
-            '("City, State/Country - Month Day Year: Description") for '
-            "this photo when exporting CSVs."
-        )
-        return checkbox
+    def _advance_spinner(self) -> None:
+        self._spinner_frame = (self._spinner_frame + 1) % len(SPINNER_FRAMES)
+        self._render_activity()
 
     def start_processing(self) -> None:
         if not self.rows:
             return
-        self.progress.setVisible(True)
+        self._processed_count = 0
         self.progress.setRange(0, len(self.rows))
         self.progress.setValue(0)
+        self.progress.setVisible(True)
+        self.activity_label.setVisible(True)
+        self._set_activity("Starting...")
+        self.spinner_timer.start()
 
         self.worker = ProcessingWorker([r.path for r in self.rows])
         self.worker.image_started.connect(self._on_image_started)
@@ -340,92 +296,99 @@ class MainWindow(QMainWindow):
         self._update_buttons()
         self.worker.start()
 
-    def _on_image_started(self, row: int) -> None:
-        self._set_status(row, "Processing...")
+    def cancel_processing(self) -> None:
+        if not self.worker:
+            return
+        self.worker.stop()
+        self.cancel_btn.setEnabled(False)
+        self._set_activity("Cancelling after the current photo...")
+
+    def _on_image_started(self, index: int) -> None:
+        state = self.rows[index]
+        state.set_status("Processing...")
+        if self.cancel_btn.isEnabled():
+            self._set_activity(
+                f"Processing {index + 1} of {len(self.rows)}: {state.path.name}"
+            )
 
     def _on_image_done(
-        self, row: int, current_meta: ImageMetadata, ai_data: AIResponse
+        self, index: int, current_meta: ImageMetadata, ai_data: AIResponse
     ) -> None:
-        state = self.rows[row]
+        state = self.rows[index]
         state.current_meta = current_meta
-
-        self._populating = True
-        self.table.item(row, COL_TITLE).setText(ai_data.title)
-        self.table.item(row, COL_DESCRIPTION).setText(ai_data.description)
-        self.table.item(row, COL_KEYWORDS).setText(", ".join(ai_data.keywords))
-        self._set_location_cells(
-            row, resolve_location(current_meta, ai_data.location_guess())
-        )
-
-        adobe_combo: QComboBox = self.table.cellWidget(row, COL_ADOBE_CATEGORY)
-        adobe_combo.setCurrentText(ai_data.adobe_category.value)
-
-        primary_combo: QComboBox = self.table.cellWidget(row, COL_SHUTTER_PRIMARY)
-        primary_combo.setCurrentText(ai_data.shutterstock_category_primary.value)
-
-        secondary_combo: QComboBox = self.table.cellWidget(row, COL_SHUTTER_SECONDARY)
-        secondary_value = ai_data.shutterstock_category_secondary
-        secondary_combo.setCurrentText(
-            secondary_value.value if secondary_value else NO_SECONDARY
-        )
-        self._populating = False
-
+        state.set_title(ai_data.title)
+        state.title_item.setToolTip(ai_data.title)
+        state.description = ai_data.description
+        state.keywords = list(ai_data.keywords)
+        state.location = resolve_location(current_meta, ai_data.location_guess())
+        state.adobe_category_id = str(ADOBE_CATEGORY_IDS[ai_data.adobe_category.value])
+        state.shutterstock_categories = [ai_data.shutterstock_category_primary.value]
+        if ai_data.shutterstock_category_secondary:
+            state.shutterstock_categories.append(
+                ai_data.shutterstock_category_secondary.value
+            )
         state.processed = True
         state.dirty = True
-        self._set_status(row, "Generated (unsaved)")
-        self.progress.setValue(self.progress.value() + 1)
+        state.set_status("Generated (unsaved)")
+        self._step_progress()
 
-    def _on_image_failed(self, row: int, message: str) -> None:
-        self._set_status(row, f"Error: {message}")
-        self.progress.setValue(self.progress.value() + 1)
+    def _on_image_failed(self, index: int, message: str) -> None:
+        self.rows[index].set_status(f"Error: {message}")
+        self._step_progress()
+
+    def _step_progress(self) -> None:
+        self._processed_count += 1
+        self.progress.setValue(self._processed_count)
 
     def _on_all_done(self) -> None:
-        self.progress.setVisible(False)
+        cancelled = self.worker is not None and self.worker.stop_requested
         self.worker = None
+        self.spinner_timer.stop()
+        self.cancel_btn.setEnabled(True)
+        self.progress.setVisible(False)
+        self.activity_label.setVisible(False)
         self._update_buttons()
+        if cancelled:
+            QMessageBox.information(
+                self,
+                "Cancelled",
+                f"Processing cancelled after {self._processed_count} of "
+                f"{len(self.rows)} photo(s).",
+            )
 
-    def _row_categories(self, row: int) -> tuple[str, list[str]]:
-        adobe_combo: QComboBox = self.table.cellWidget(row, COL_ADOBE_CATEGORY)
-        adobe_category_id = str(ADOBE_CATEGORY_IDS[adobe_combo.currentText()])
-
-        primary_combo: QComboBox = self.table.cellWidget(row, COL_SHUTTER_PRIMARY)
-        secondary_combo: QComboBox = self.table.cellWidget(row, COL_SHUTTER_SECONDARY)
-        shutterstock_categories = [primary_combo.currentText()]
-        if secondary_combo.currentText() != NO_SECONDARY:
-            shutterstock_categories.append(secondary_combo.currentText())
-        return adobe_category_id, shutterstock_categories
+    def closeEvent(self, event) -> None:
+        # Let the worker finish its current photo rather than killing the
+        # thread mid-write/mid-request.
+        if self.worker:
+            self.worker.stop()
+            self.worker.wait()
+        super().closeEvent(event)
 
     def _write_dirty_rows(self) -> tuple[int, list[str]]:
-        """Writes every modified row into its file; returns (written count,
-        failed filenames)."""
+        """Writes every row with unsaved generated metadata into its file;
+        returns (written count, failed filenames)."""
         written = 0
         failures: list[str] = []
-        for row, state in enumerate(self.rows):
+        for state in self.rows:
             if not state.dirty:
                 continue
-            adobe_category_id, shutterstock_categories = self._row_categories(row)
-            location = self._row_location(row)
             success = write_metadata(
                 state.path,
-                self._cell_text(row, COL_TITLE),
-                self._cell_text(row, COL_DESCRIPTION),
-                self._row_keywords(row),
-                adobe_category_id,
-                shutterstock_categories,
-                location=location,
+                state.title,
+                state.description,
+                state.keywords,
+                state.adobe_category_id,
+                state.shutterstock_categories,
+                location=state.location,
             )
             if success:
                 written += 1
                 state.dirty = False
                 state.processed = True
-                if state.current_meta and not location.is_empty():
-                    state.current_meta.iptc_city = location.city
-                    state.current_meta.iptc_province_state = location.province_state
-                    state.current_meta.iptc_country = location.country
-                self._set_status(row, "Written")
+                state.set_status("Written")
             else:
                 failures.append(state.path.name)
-                self._set_status(row, "Write failed")
+                state.set_status("Write failed")
         self._update_buttons()
         return written, failures
 
@@ -451,10 +414,10 @@ class MainWindow(QMainWindow):
             answer = QMessageBox.question(
                 self,
                 "Unsaved changes",
-                f"{unsaved} photo(s) have changes not yet written to the "
-                "files. Write them before exporting?\n\n"
-                "(Choosing No exports the table as shown, without saving it "
-                "into the photos.)",
+                f"{unsaved} photo(s) have generated metadata not yet written "
+                "to the files. Write them before exporting?\n\n"
+                "(Choosing No exports it anyway, without saving it into the "
+                "photos.)",
                 QMessageBox.StandardButton.Yes
                 | QMessageBox.StandardButton.No
                 | QMessageBox.StandardButton.Cancel,
@@ -476,38 +439,32 @@ class MainWindow(QMainWindow):
         records: list[ExportRecord] = []
         editorial_unresolved: list[str] = []
 
-        for row, state in enumerate(self.rows):
+        for state in sorted(self.rows, key=lambda r: r.path.name.lower()):
             if not state.processed:
                 continue
 
-            description = self._cell_text(row, COL_DESCRIPTION)
-            adobe_category_id, shutterstock_categories = self._row_categories(row)
-
-            editorial_checkbox: QCheckBox = self.table.cellWidget(row, COL_EDITORIAL)
-            editorial_requested = editorial_checkbox.isChecked()
-            location = self._row_location(row)
             meta = state.current_meta or ImageMetadata()
             date_created = meta.date_created
             shutterstock_description = build_shutterstock_description(
-                description, location, date_created, editorial_requested
+                state.description, state.location, date_created, state.editorial
             )
             # Only mark the CSV row Editorial if a dateline was actually
             # resolved and applied above - marking it Yes without one would
             # get the submission rejected by Shutterstock.
-            dateline_applied = editorial_requested and resolve_editorial_dateline(
-                location, date_created
+            dateline_applied = state.editorial and resolve_editorial_dateline(
+                state.location, date_created
             )
-            if editorial_requested and not dateline_applied:
+            if state.editorial and not dateline_applied:
                 editorial_unresolved.append(state.path.name)
 
             records.append(
                 ExportRecord(
                     filename=state.path.name,
-                    title=self._cell_text(row, COL_TITLE),
+                    title=state.title,
                     description=shutterstock_description,
-                    keywords=self._row_keywords(row),
-                    adobe_category_id=adobe_category_id,
-                    shutterstock_categories=shutterstock_categories,
+                    keywords=state.keywords,
+                    adobe_category_id=state.adobe_category_id or "",
+                    shutterstock_categories=state.shutterstock_categories,
                     editorial=bool(dateline_applied),
                 )
             )
