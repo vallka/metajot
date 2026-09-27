@@ -43,15 +43,20 @@ Run from the project root (see [Gotchas](#gotchas) below):
 uv run metajot
 ```
 
-This opens the desktop window. Pick a photo folder, click **Process with AI** to generate
-titles/descriptions/keywords/categories, review and edit them in the table, then click
-**Write Metadata & Export CSVs** to write them into the files and generate
-`adobe_stock.csv` / `shutterstock.csv` in that folder.
+This opens the desktop window. The workflow has three separate steps:
 
-Tick a photo's **Editorial** checkbox to format its Shutterstock CSV description as an
-AP/Reuters-style editorial dateline (`"City, State/Country - Month Day Year: Description"`),
-using IPTC location fields, GPS reverse-geocoding, or an AI-inferred guess from keywords, in
-that priority order.
+1. **Select Folder...** and click **Process with AI** to generate titles, descriptions,
+   keywords, categories and a location for each photo. Review and edit them in the table.
+2. **Write Metadata** saves the table into the photo files (IPTC, mirrored to EXIF/XMP),
+   including the location in the standard City / State-Province / Country fields.
+3. **Export CSVs** generates `adobe_stock.csv` / `shutterstock.csv` in that folder.
+
+The location comes from the location already embedded in the photo, then GPS
+reverse-geocoding, then the AI's guess from keywords and the scene, in that priority order.
+Since it's saved into the file, you can reopen a processed folder later, tick a photo's
+**Editorial** checkbox, and export again without re-running the AI. Editorial rows get an
+AP/Reuters-style dateline in the Shutterstock description
+(`"City, State/Country - Month Day Year: Description"`) and are marked Editorial in the CSV.
 
 ## Development
 

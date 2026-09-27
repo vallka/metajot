@@ -6,6 +6,7 @@ import pytest
 from exif import Image as ExifImage
 from iptcinfo3 import IPTCInfo
 
+from metajot.location import Location
 from metajot.metadata import (
     ImageMetadata,
     _exif_datetime_to_iptc_date,
@@ -13,7 +14,7 @@ from metajot.metadata import (
     resolve_deterministic_location,
     write_metadata,
 )
-from metajot.xmp import read_xmp_packet
+from metajot.xmp import read_xmp_packet, write_xmp_metadata
 
 logging.getLogger("iptcinfo").setLevel(logging.ERROR)
 
@@ -93,12 +94,16 @@ def test_resolve_deterministic_location_prefers_iptc_over_gps():
         gps_latitude=40.7128,  # NYC - should be ignored since IPTC city is set
         gps_longitude=-74.0060,
     )
-    assert resolve_deterministic_location(meta) == "Edinburgh, Scotland"
+    assert resolve_deterministic_location(meta) == Location(
+        city="Edinburgh", province_state="Scotland"
+    )
 
 
 def test_resolve_deterministic_location_falls_back_to_gps():
     meta = ImageMetadata(gps_latitude=55.9533, gps_longitude=-3.1883)
-    assert resolve_deterministic_location(meta) == "Edinburgh, UK"
+    assert resolve_deterministic_location(meta) == Location(
+        city="Edinburgh", country="UK"
+    )
 
 
 def test_resolve_deterministic_location_none_when_nothing_available():
@@ -129,3 +134,50 @@ def test_read_metadata_falls_back_to_exif_date_when_no_iptc_date(image_copy):
 
     meta = read_metadata(image_copy)
     assert meta.date_created == "20260914"
+
+
+def _clear_iptc_location(path):
+    iptc = IPTCInfo(path, force=True)
+    for key in ("city", "province/state", "country/primary location name"):
+        iptc[key] = None
+    iptc.save(options=["overwrite"])
+
+
+def test_write_metadata_saves_location_to_iptc_and_xmp(image_copy):
+    _clear_iptc_location(image_copy)
+    location = Location(
+        city="Paris", province_state="Ile-de-France", country="France"
+    )
+
+    ok = write_metadata(image_copy, "T", "D", ["k"], location=location)
+    assert ok is True
+
+    assert read_metadata(image_copy).embedded_location() == location
+
+    xml = read_xmp_packet(image_copy.read_bytes())
+    assert 'photoshop:City="Paris"' in xml
+    assert 'photoshop:State="Ile-de-France"' in xml
+    assert 'photoshop:Country="France"' in xml
+
+
+def test_write_metadata_clears_empty_location_parts(image_copy):
+    texas = Location(city="Austin", province_state="TX", country="USA")
+    paris = Location(city="Paris", country="France")
+    write_metadata(image_copy, "T", "D", ["k"], location=texas)
+    write_metadata(image_copy, "T", "D", ["k"], location=paris)
+    assert read_metadata(image_copy).embedded_location() == paris
+
+
+def test_write_metadata_without_location_keeps_existing(image_copy):
+    location = Location(city="Paris", country="France")
+    write_metadata(image_copy, "T", "D", ["k"], location=location)
+    write_metadata(image_copy, "T2", "D2", ["k2"])
+    assert read_metadata(image_copy).embedded_location() == location
+
+
+def test_read_metadata_falls_back_to_xmp_location(image_copy):
+    # Some tools write the location to XMP only, leaving IPTC empty.
+    _clear_iptc_location(image_copy)
+    rome = Location(city="Rome", country="Italy")
+    write_xmp_metadata(image_copy, "T", "D", ["k"], location=rome)
+    assert read_metadata(image_copy).embedded_location() == rome

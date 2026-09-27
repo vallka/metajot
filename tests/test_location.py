@@ -1,7 +1,9 @@
 from metajot.location import (
+    Location,
     build_editorial_description,
     format_editorial_date,
     format_editorial_location,
+    location_from_city,
     reverse_geocode,
 )
 
@@ -25,14 +27,39 @@ def test_reverse_geocode_returns_none_for_remote_ocean_point():
     assert reverse_geocode(0.0, -140.0) is None
 
 
-def test_format_editorial_location_us_uses_state_abbreviation():
-    city = reverse_geocode(40.7128, -74.0060)
-    assert format_editorial_location(city) == "New York City, NY"
+def test_location_from_city_us_keeps_state_abbreviation():
+    location = location_from_city(reverse_geocode(40.7128, -74.0060))
+    assert location.city == "New York City"
+    assert location.province_state == "NY"
+    assert format_editorial_location(location) == "New York City, NY"
 
 
-def test_format_editorial_location_non_us_uses_country_name():
-    city = reverse_geocode(55.9533, -3.1883)
-    assert format_editorial_location(city) == "Edinburgh, UK"
+def test_location_from_city_non_us_uses_country_name():
+    location = location_from_city(reverse_geocode(55.9533, -3.1883))
+    assert location == Location(city="Edinburgh", country="UK")
+    assert format_editorial_location(location) == "Edinburgh, UK"
+
+
+def test_format_editorial_location_non_us_prefers_country_over_state():
+    location = Location(city="Edinburgh", province_state="Scotland", country="UK")
+    assert format_editorial_location(location) == "Edinburgh, UK"
+
+
+def test_format_editorial_location_us_spellings_use_state():
+    for country in ("USA", "United States", "U.S."):
+        location = Location(city="Austin", province_state="TX", country=country)
+        assert format_editorial_location(location) == "Austin, TX"
+
+
+def test_format_editorial_location_uses_state_when_no_country():
+    location = Location(city="Edinburgh", province_state="Scotland")
+    assert format_editorial_location(location) == "Edinburgh, Scotland"
+
+
+def test_format_editorial_location_without_city():
+    location = Location(province_state="Scotland", country="UK")
+    assert format_editorial_location(location) == "Scotland, UK"
+    assert format_editorial_location(Location()) is None
 
 
 def test_format_editorial_date():

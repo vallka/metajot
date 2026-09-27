@@ -27,6 +27,17 @@ EARTH_RADIUS_KM = 6371.0
 # abbreviated in datelines rather than spelled out in full.
 COUNTRY_NAME_OVERRIDES = {"GB": "UK"}
 
+# Spellings of the US country name (from GeoNames, existing IPTC fields, or
+# the AI) that mean the dateline should use the state instead of the country.
+US_COUNTRY_NAMES = {
+    "us",
+    "usa",
+    "u.s.",
+    "u.s.a.",
+    "united states",
+    "united states of america",
+}
+
 
 @dataclass(frozen=True)
 class City:
@@ -36,6 +47,19 @@ class City:
     country_code: str
     admin1_code: str
     population: int
+
+
+@dataclass
+class Location:
+    """A photo's location, as stored in the IPTC City / Province-State /
+    Country fields (mirrored to XMP photoshop:City/State/Country)."""
+
+    city: Optional[str] = None
+    province_state: Optional[str] = None
+    country: Optional[str] = None
+
+    def is_empty(self) -> bool:
+        return not (self.city or self.province_state or self.country)
 
 
 def _grid_key(lat: float, lon: float) -> Tuple[int, int]:
@@ -136,14 +160,40 @@ def country_name(country_code: str) -> Optional[str]:
     return _load_countries().get(country_code)
 
 
-def format_editorial_location(city: City) -> str:
-    """Formats a City as the "City, State/Country" half of an editorial
-    dateline - US cities use the state abbreviation (GeoNames' US admin1
-    codes already are the USPS abbreviation), everywhere else uses the
-    country name."""
-    if city.country_code == "US" and city.admin1_code:
-        return f"{city.name}, {city.admin1_code}"
-    return f"{city.name}, {country_name(city.country_code) or city.country_code}"
+def location_from_city(city: City) -> Location:
+    """Converts a reverse-geocoded City to a Location. Only US cities get a
+    province/state, since GeoNames' US admin1 codes are already the USPS
+    abbreviation, while elsewhere they're opaque numeric codes."""
+    if city.country_code == "US":
+        return Location(
+            city=city.name,
+            province_state=city.admin1_code or None,
+            country=country_name("US"),
+        )
+    return Location(
+        city=city.name,
+        country=country_name(city.country_code) or city.country_code,
+    )
+
+
+def _is_us(country: Optional[str]) -> bool:
+    return bool(country) and country.strip().lower() in US_COUNTRY_NAMES
+
+
+def format_editorial_location(location: Location) -> Optional[str]:
+    """Formats a Location as the "City, State/Country" half of an editorial
+    dateline: US locations use the state, everywhere else uses the country
+    (or the province/state if no country is known). Without a city, falls
+    back to whatever region/country is known, or None if nothing is."""
+    if not location.city:
+        region_parts = [p for p in (location.province_state, location.country) if p]
+        return ", ".join(region_parts) or None
+
+    if _is_us(location.country) and location.province_state:
+        region = location.province_state
+    else:
+        region = location.country or location.province_state
+    return f"{location.city}, {region}" if region else location.city
 
 
 def format_editorial_date(date_created: str) -> Optional[str]:

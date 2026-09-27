@@ -10,7 +10,12 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from metajot.config import settings
-from metajot.location import build_editorial_description, format_editorial_date
+from metajot.location import (
+    Location,
+    build_editorial_description,
+    format_editorial_date,
+    format_editorial_location,
+)
 from metajot.metadata import ImageMetadata, resolve_deterministic_location
 from metajot.sanitize import sanitize_shutterstock_description, sanitize_typography
 
@@ -98,18 +103,31 @@ class AIResponse(BaseModel):
 
     # Placed immediately after setting_and_context - where the model has just
     # reasoned about location - rather than at the end after categories, so
-    # it restates that same place name while it's still "front of mind"
-    # instead of treating this as a fresh, separate judgment call.
-    location_guess: Optional[str] = Field(
+    # it restates that same place while it's still "front of mind" instead
+    # of treating this as a fresh, separate judgment call. Only used when the
+    # photo has no embedded location or GPS data; saved into the file's
+    # location fields so it doesn't have to be guessed again.
+    location_city: Optional[str] = Field(
         default=None,
         description=(
-            'Best-effort "City, State/Country" for this photo, restating '
-            "whatever place you already identified in setting_and_context "
-            "(or will identify in the keywords/title/description) - not a "
-            "new judgment call, just echoing it in this structured field. "
-            "Only used as a fallback when the photo has no existing IPTC "
-            "location fields or GPS data. Leave it null only if you "
-            "genuinely cannot identify any city, region, or country at all."
+            "City or town of the place you identified in setting_and_context "
+            "(or the most specific named place, e.g. a national park, if no "
+            "city applies). Null if no specific place is identifiable."
+        ),
+    )
+    location_province_state: Optional[str] = Field(
+        default=None,
+        description=(
+            "State/province/region of that place: the two-letter USPS "
+            "abbreviation for US states (e.g. NY), otherwise its name "
+            "(e.g. Scotland, Bavaria). Null if unknown."
+        ),
+    )
+    location_country: Optional[str] = Field(
+        default=None,
+        description=(
+            'Country of that place, e.g. "UK", "USA", "France". Null only if '
+            "you genuinely cannot identify any location at all."
         ),
     )
 
@@ -124,6 +142,14 @@ class AIResponse(BaseModel):
     adobe_category: AdobeStockCategory
     shutterstock_category_primary: ShutterstockCategory
     shutterstock_category_secondary: Optional[ShutterstockCategory] = None
+
+    def location_guess(self) -> Optional[Location]:
+        location = Location(
+            city=self.location_city,
+            province_state=self.location_province_state,
+            country=self.location_country,
+        )
+        return None if location.is_empty() else location
 
 
 def _truncate_at_word_boundary(text: str, max_chars: int) -> str:
@@ -142,6 +168,12 @@ def _dedupe_keywords(keywords: list[str]) -> list[str]:
         seen.add(keyword.lower())
         result.append(keyword)
     return result[:MAX_KEYWORDS]
+
+
+def _clean_optional(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    return sanitize_typography(value).strip() or None
 
 
 def encode_image(image_path: Path, max_dimension: int) -> str:
@@ -185,7 +217,9 @@ def generate_metadata(image_path: Path, current_meta: ImageMetadata) -> AIRespon
         context_lines.append(f"Location Data: {current_meta.location_data}")
     existing_location = resolve_deterministic_location(current_meta)
     if existing_location:
-        context_lines.append(f"Known Location: {existing_location}")
+        context_lines.append(
+            f"Known Location: {format_editorial_location(existing_location)}"
+        )
 
     prompt = "Please analyze this image and generate the requested metadata."
     if context_lines:
@@ -225,6 +259,11 @@ def generate_metadata(image_path: Path, current_meta: ImageMetadata) -> AIRespon
             )
             parsed.description = sanitize_typography(parsed.description.strip())
             parsed.keywords = _dedupe_keywords(parsed.keywords)
+            parsed.location_city = _clean_optional(parsed.location_city)
+            parsed.location_province_state = _clean_optional(
+                parsed.location_province_state
+            )
+            parsed.location_country = _clean_optional(parsed.location_country)
             if (
                 parsed.shutterstock_category_secondary
                 == parsed.shutterstock_category_primary
@@ -237,40 +276,36 @@ def generate_metadata(image_path: Path, current_meta: ImageMetadata) -> AIRespon
             time.sleep(RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1))
 
 
-def resolve_editorial_location(
-    current_meta: ImageMetadata, location_guess: Optional[str] = None
-) -> Optional[str]:
-    """Resolves the "City, State/Country" half of an editorial dateline:
-    IPTC location fields and GPS reverse-geocoding (both deterministic) take
-    priority over an AI-provided best-effort guess from keywords/visual
-    context (AIResponse.location_guess)."""
+def resolve_location(
+    current_meta: ImageMetadata, location_guess: Optional[Location] = None
+) -> Optional[Location]:
+    """Resolves a photo's location: the location already embedded in the
+    file and GPS reverse-geocoding (both deterministic) take priority over
+    the AI's best-effort guess from keywords/visual context
+    (AIResponse.location_guess())."""
     return resolve_deterministic_location(current_meta) or location_guess
 
 
 def resolve_editorial_dateline(
-    current_meta: ImageMetadata, location_guess: Optional[str] = None
+    location: Optional[Location], date_created: Optional[str]
 ) -> Optional[Tuple[str, str]]:
-    """Resolves the (location, date) pair an editorial dateline needs, or
-    None if either can't be determined. Shared by build_shutterstock_
+    """Resolves the (location, date) text pair an editorial dateline needs,
+    or None if either can't be determined. Shared by build_shutterstock_
     description() and by callers that need to know whether editorial
     formatting will actually apply (e.g. to set Shutterstock's CSV
     "Editorial" column truthfully - marking a photo Editorial without an
     actual dateline in the description would get it rejected)."""
-    location = resolve_editorial_location(current_meta, location_guess)
-    date_text = (
-        format_editorial_date(current_meta.date_created)
-        if current_meta.date_created
-        else None
-    )
-    if location and date_text:
-        return location, date_text
+    location_text = format_editorial_location(location) if location else None
+    date_text = format_editorial_date(date_created) if date_created else None
+    if location_text and date_text:
+        return location_text, date_text
     return None
 
 
 def build_shutterstock_description(
-    current_meta: ImageMetadata,
     description: str,
-    location_guess: Optional[str] = None,
+    location: Optional[Location] = None,
+    date_created: Optional[str] = None,
     editorial: bool = False,
 ) -> str:
     """Returns the description to use for Shutterstock's CSV "Description"
@@ -278,17 +313,17 @@ def build_shutterstock_description(
     requested for this photo - prefixed with the AP/Reuters-style
     "City, State/Country - Month Day Year:" dateline Shutterstock's Editorial
     content requires. Falls back to the plain description if a location or
-    date can't be resolved, rather than emit a malformed dateline. Takes the
-    description/location_guess as plain values (not an AIResponse) so a
-    user's manual edits to the description in the GUI are honored too."""
+    date can't be resolved, rather than emit a malformed dateline. Takes
+    plain values (not an AIResponse) so the user's edits in the GUI, and
+    metadata already saved in the file, are honored too."""
     if not editorial:
         return sanitize_shutterstock_description(description)
 
-    dateline = resolve_editorial_dateline(current_meta, location_guess)
+    dateline = resolve_editorial_dateline(location, date_created)
     if not dateline:
         return sanitize_shutterstock_description(description)
 
-    location, date_text = dateline
+    location_text, date_text = dateline
     return sanitize_shutterstock_description(
-        build_editorial_description(location, date_text, description)
+        build_editorial_description(location_text, date_text, description)
     )

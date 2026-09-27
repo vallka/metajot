@@ -6,9 +6,14 @@ from typing import List, Optional
 from exif import Image as ExifImage
 from iptcinfo3 import IPTCInfo
 
-from metajot.location import format_editorial_location, reverse_geocode
+from metajot.location import Location, location_from_city, reverse_geocode
 from metajot.sanitize import to_ascii
-from metajot.xmp import read_metajot_processed_at, read_xmp_packet, write_xmp_metadata
+from metajot.xmp import (
+    read_metajot_processed_at,
+    read_xmp_location,
+    read_xmp_packet,
+    write_xmp_metadata,
+)
 
 # iptcinfo3 can be very noisy in the console, so we suppress its warnings
 logging.getLogger("iptcinfo").setLevel(logging.ERROR)
@@ -23,8 +28,10 @@ class ImageMetadata:
     location_data: Optional[str] = None
     gps_latitude: Optional[float] = None
     gps_longitude: Optional[float] = None
-    # Existing IPTC location fields, if the original editing tool (e.g.
-    # Capture One) already filled them in.
+    # Location embedded in the file: IPTC City/Province-State/Country (or
+    # their XMP photoshop:City/State/Country mirror if IPTC has none), as
+    # filled in by the original editing tool (e.g. Capture One) or saved by
+    # a previous MetaJot run.
     iptc_city: Optional[str] = None
     iptc_province_state: Optional[str] = None
     iptc_country: Optional[str] = None
@@ -40,6 +47,14 @@ class ImageMetadata:
     # marker into this file - the authoritative "already processed" signal,
     # independent of whether category data happens to be filled in.
     processed_at: Optional[str] = None
+
+    def embedded_location(self) -> Optional[Location]:
+        location = Location(
+            city=self.iptc_city,
+            province_state=self.iptc_province_state,
+            country=self.iptc_country,
+        )
+        return None if location.is_empty() else location
 
 
 def _dms_to_decimal(dms: tuple, ref: Optional[str]) -> Optional[float]:
@@ -115,11 +130,17 @@ def read_metadata(image_path: Path) -> ImageMetadata:
     except Exception as e:
         print(f"Warning: Failed to read IPTC from {image_path}: {e}")
 
-    # Read the metajot:ProcessedAt marker from XMP, if any
+    # Read the metajot:ProcessedAt marker from XMP, if any, and the XMP
+    # location if IPTC doesn't carry one (some tools only write XMP)
     try:
         xmp_xml = read_xmp_packet(image_path.read_bytes())
         if xmp_xml:
             meta.processed_at = read_metajot_processed_at(xmp_xml)
+            xmp_location = read_xmp_location(xmp_xml)
+            if xmp_location and not meta.embedded_location():
+                meta.iptc_city = xmp_location.city
+                meta.iptc_province_state = xmp_location.province_state
+                meta.iptc_country = xmp_location.country
     except Exception as e:
         print(f"Warning: Failed to read XMP from {image_path}: {e}")
 
@@ -155,22 +176,18 @@ def read_metadata(image_path: Path) -> ImageMetadata:
     return meta
 
 
-def resolve_deterministic_location(meta: ImageMetadata) -> Optional[str]:
-    """Resolves an editorial-style "City, State/Country" location for a photo
-    without needing AI: prefers IPTC location fields already filled in by the
-    original editing tool, then falls back to reverse-geocoding embedded GPS
-    coordinates. Returns None if neither is available - callers should then
-    fall back to asking the AI to infer a location from keywords/visuals."""
-    if meta.iptc_city:
-        region = meta.iptc_province_state or meta.iptc_country
-        if region:
-            return f"{meta.iptc_city}, {region}"
-        return meta.iptc_city
+def resolve_deterministic_location(meta: ImageMetadata) -> Optional[Location]:
+    """Resolves a photo's location without needing AI: prefers the location
+    already embedded in the file, then falls back to reverse-geocoding
+    embedded GPS coordinates. Returns None if neither is available - callers
+    should then fall back to the AI's guess from keywords/visuals."""
+    if embedded := meta.embedded_location():
+        return embedded
 
     if meta.gps_latitude is not None and meta.gps_longitude is not None:
         city = reverse_geocode(meta.gps_latitude, meta.gps_longitude)
         if city:
-            return format_editorial_location(city)
+            return location_from_city(city)
 
     return None
 
@@ -182,8 +199,12 @@ def write_metadata(
     keywords: List[str],
     adobe_category_id: Optional[str] = None,
     shutterstock_categories: Optional[List[str]] = None,
+    location: Optional[Location] = None,
 ) -> bool:
-    """Writes new IPTC Title, Description, Keywords, and categories to the image."""
+    """Writes new IPTC Title, Description, Keywords, and categories to the
+    image. If a non-empty location is given, it's written to the IPTC
+    City/Province-State/Country fields (and XMP) too, with empty parts
+    cleared; otherwise the file's existing location fields are left as-is."""
     try:
         iptc = IPTCInfo(image_path, force=True)
 
@@ -207,6 +228,18 @@ def write_metadata(
             iptc["supplemental category"] = [
                 c.encode("utf-8") for c in shutterstock_categories
             ]
+
+        # Persisting the location (e.g. resolved from GPS or guessed by the
+        # AI) means it doesn't have to be re-derived later, e.g. when
+        # exporting an editorial dateline in a later session.
+        if location and not location.is_empty():
+            for key, value in (
+                ("city", location.city),
+                ("province/state", location.province_state),
+                ("country/primary location name", location.country),
+            ):
+                # iptcinfo3 skips None values when saving, removing the field
+                iptc[key] = value.encode("utf-8") if value else None
 
         # "overwrite" makes iptc.save() write back to image_path directly
         # without leaving an "image_path~" backup of the previous version.
@@ -232,7 +265,9 @@ def write_metadata(
         with open(image_path, "wb") as f:
             f.write(exif_img.get_file())
 
-        return write_xmp_metadata(image_path, title, description, keywords)
+        return write_xmp_metadata(
+            image_path, title, description, keywords, location=location
+        )
     except Exception as e:
         print(f"Error writing metadata to {image_path}: {e}")
         return False

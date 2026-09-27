@@ -30,21 +30,29 @@ There is no separate build step (pure Python, hatchling backend).
 
 Entry point is `main()` in [src/metajot/gui/app.py](src/metajot/gui/app.py), which opens
 `MainWindow` ([gui/main_window.py](src/metajot/gui/main_window.py)). AI generation runs off the
-UI thread in `ProcessingWorker` ([gui/worker.py](src/metajot/gui/worker.py)); writing and CSV
-export happen in `MainWindow.write_and_export()` after the user reviews/edits the table. Pipeline:
+UI thread in `ProcessingWorker` ([gui/worker.py](src/metajot/gui/worker.py)). Writing metadata
+(**Write Metadata**) and exporting CSVs (**Export CSVs**) are separate steps: export works from
+the table plus what's already embedded in the files, so a folder reopened later can be exported
+(e.g. with Editorial ticked) without re-running the AI. Pipeline:
 
 1. **[metadata.py](src/metajot/metadata.py)** `read_metadata()` — reads existing IPTC fields
-   (title/description/keywords via `iptcinfo3`) and EXIF GPS tags (via `exif`) from a `.jpg`.
+   (title/description/keywords/categories/location via `iptcinfo3`, falling back to XMP
+   `photoshop:City/State/Country` for location) and EXIF GPS/date tags (via `exif`) from a `.jpg`.
 2. **[ai.py](src/metajot/ai.py)** `generate_metadata()` — downscales the image with Pillow
    (`AIConfig.max_image_dimension`, default 1024px on the long edge) before base64-encoding it,
    builds a prompt from the existing metadata as context, and calls the OpenAI-compatible
-   `chat.completions.parse` API with a Pydantic `AIResponse` schema (`title`, `description`,
-   `keywords`) for structured output.
-3. **[metadata.py](src/metajot/metadata.py)** `write_metadata()` — writes the AI-generated
-   title/description/keywords back into the file's IPTC fields via `iptcinfo3`.
-4. **[exporter.py](src/metajot/exporter.py)** — once all images are processed, writes
-   `adobe_stock.csv` (Filename, Title, Keywords, Category) and `shutterstock.csv` (Filename,
-   Description, Keywords, Categories) into the processed directory.
+   `chat.completions.parse` API with a Pydantic `AIResponse` schema (title, description,
+   keywords, categories, and a `location_city/province_state/country` guess) for structured output.
+3. **Location** — `resolve_location()` picks the embedded location, else GPS reverse-geocoding
+   ([location.py](src/metajot/location.py), offline GeoNames data), else the AI guess, as a
+   structured `Location`. It's shown in editable City/State/Country columns and saved into the file.
+4. **[metadata.py](src/metajot/metadata.py)** `write_metadata()` — writes title/description/
+   keywords/categories/location into IPTC (via `iptcinfo3`), mirrored into EXIF and XMP
+   ([xmp.py](src/metajot/xmp.py)), plus a `metajot:ProcessedAt` XMP marker.
+5. **[exporter.py](src/metajot/exporter.py)** — writes `adobe_stock.csv` (Filename, Title,
+   Keywords, Category) and `shutterstock.csv` (Filename, Description, Keywords, Categories,
+   Illustration, Mature Content, Editorial) for all processed photos in the folder. Editorial rows
+   get an AP-style dateline built from the row's location and the photo's date.
 
 **[config.py](src/metajot/config.py)** loads `config.toml` (`[ai]` model/base_url/api_key/
 max_image_dimension, `[prompts]` system_prompt) once at import time into a module-level `settings`

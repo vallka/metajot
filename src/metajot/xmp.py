@@ -17,12 +17,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+from metajot.location import Location
+
 XMP_SIGNATURE = b"http://ns.adobe.com/xap/1.0/\x00"
 
 NS_X = "adobe:ns:meta/"
 NS_RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 NS_DC = "http://purl.org/dc/elements/1.1/"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
+NS_PHOTOSHOP = "http://ns.adobe.com/photoshop/1.0/"
+
+# XMP mirrors of the IPTC City / Province-State / Country fields.
+LOCATION_TAGS = ("City", "State", "Country")
 
 # Nominal namespace identifying MetaJot's own custom property - doesn't need to
 # resolve to anything, it just has to be globally unique, per XMP convention.
@@ -45,7 +51,7 @@ ET.register_namespace("tiff", "http://ns.adobe.com/tiff/1.0/")
 ET.register_namespace("exif", "http://ns.adobe.com/exif/1.0/")
 ET.register_namespace("exifEX", "http://cipa.jp/exif/1.0/")
 ET.register_namespace("aux", "http://ns.adobe.com/exif/1.0/aux/")
-ET.register_namespace("photoshop", "http://ns.adobe.com/photoshop/1.0/")
+ET.register_namespace("photoshop", NS_PHOTOSHOP)
 ET.register_namespace("lr", "http://ns.adobe.com/lightroom/1.0/")
 ET.register_namespace("Iptc4xmpCore", "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/")
 ET.register_namespace("mwg-rs", "http://www.metadataworkinggroup.com/schemas/regions/")
@@ -166,10 +172,7 @@ def _set_bag(desc: ET.Element, tag: str, values: List[str]) -> None:
         li.text = value
 
 
-def read_metajot_processed_at(xml_text: str) -> Optional[str]:
-    """Returns the metajot:ProcessedAt timestamp recorded by a previous MetaJot
-    run, if any - the marker used to tell already-processed files apart from
-    untouched ones when a folder is reopened."""
+def _find_description(xml_text: str) -> Optional[ET.Element]:
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError:
@@ -177,10 +180,51 @@ def read_metajot_processed_at(xml_text: str) -> Optional[str]:
     rdf = root.find(_qn(NS_RDF, "RDF"))
     if rdf is None:
         return None
-    desc = rdf.find(_qn(NS_RDF, "Description"))
+    return rdf.find(_qn(NS_RDF, "Description"))
+
+
+def _get_simple(desc: ET.Element, ns: str, tag: str) -> Optional[str]:
+    """Reads a simple XMP property, which may be serialized either as an
+    attribute of rdf:Description or as a child element."""
+    value = desc.get(_qn(ns, tag))
+    if value is None:
+        el = desc.find(_qn(ns, tag))
+        value = el.text if el is not None else None
+    value = value.strip() if value else None
+    return value or None
+
+
+def _set_simple(desc: ET.Element, ns: str, tag: str, value: Optional[str]) -> None:
+    """Sets a simple XMP property as an rdf:Description attribute, removing
+    any existing attribute/child-element form of it first. None removes it."""
+    existing = desc.find(_qn(ns, tag))
+    if existing is not None:
+        desc.remove(existing)
+    desc.attrib.pop(_qn(ns, tag), None)
+    if value:
+        desc.set(_qn(ns, tag), value)
+
+
+def read_metajot_processed_at(xml_text: str) -> Optional[str]:
+    """Returns the metajot:ProcessedAt timestamp recorded by a previous MetaJot
+    run, if any - the marker used to tell already-processed files apart from
+    untouched ones when a folder is reopened."""
+    desc = _find_description(xml_text)
     if desc is None:
         return None
     return desc.get(_qn(NS_METAJOT, PROCESSED_AT_TAG))
+
+
+def read_xmp_location(xml_text: str) -> Optional[Location]:
+    """Returns the photoshop:City/State/Country location, if any is set."""
+    desc = _find_description(xml_text)
+    if desc is None:
+        return None
+    city, state, country = (
+        _get_simple(desc, NS_PHOTOSHOP, tag) for tag in LOCATION_TAGS
+    )
+    location = Location(city=city, province_state=state, country=country)
+    return None if location.is_empty() else location
 
 
 def build_updated_xmp(
@@ -189,18 +233,25 @@ def build_updated_xmp(
     description: str,
     keywords: List[str],
     processed_at: Optional[str] = None,
+    location: Optional[Location] = None,
 ) -> str:
     """Returns an XMP packet with dc:title/dc:description/dc:subject set to the
     given values, preserving every other property already in existing_xml.
     Also stamps metajot:ProcessedAt (current UTC time by default) as an
     unambiguous "this file was processed by MetaJot" marker, independent of
-    whatever category data happens to be filled in."""
+    whatever category data happens to be filled in. If a non-empty location
+    is given, photoshop:City/State/Country are set to it too (empty parts
+    are removed); otherwise they're left as they were."""
     root = _parse_xmp_root(existing_xml) if existing_xml else _new_xmp_root()
     rdf = _find_or_create_rdf(root)
     desc = _find_or_create_description(rdf)
     _set_lang_alt(desc, "title", title)
     _set_lang_alt(desc, "description", description)
     _set_bag(desc, "subject", keywords)
+    if location and not location.is_empty():
+        values = (location.city, location.province_state, location.country)
+        for tag, value in zip(LOCATION_TAGS, values):
+            _set_simple(desc, NS_PHOTOSHOP, tag, value)
     desc.set(
         _qn(NS_METAJOT, PROCESSED_AT_TAG),
         processed_at or datetime.now(timezone.utc).isoformat(),
@@ -224,16 +275,23 @@ def _build_xmp_segment(xmp_xml: str) -> bytes:
 
 
 def write_xmp_metadata(
-    image_path: Path, title: str, description: str, keywords: List[str]
+    image_path: Path,
+    title: str,
+    description: str,
+    keywords: List[str],
+    location: Optional[Location] = None,
 ) -> bool:
     """Writes title/description/keywords into the JPEG's XMP dc:title,
     dc:description and dc:subject properties, creating the XMP packet if the
     file doesn't have one yet. Leaves every other XMP property untouched.
-    Also stamps a metajot:ProcessedAt marker (see build_updated_xmp)."""
+    Also stamps a metajot:ProcessedAt marker and, if given, the location
+    (see build_updated_xmp)."""
     try:
         data = image_path.read_bytes()
         existing_xml = read_xmp_packet(data)
-        new_xml = build_updated_xmp(existing_xml, title, description, keywords)
+        new_xml = build_updated_xmp(
+            existing_xml, title, description, keywords, location=location
+        )
         new_segment = _build_xmp_segment(new_xml)
 
         seg = _find_xmp_segment(data)
