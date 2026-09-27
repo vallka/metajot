@@ -1,6 +1,6 @@
 # MetaJot
 
-MetaJot is a desktop Python CLI that automates metadata tagging of `.jpg` files for stock photo
+MetaJot is a desktop Python (PySide6) app that automates metadata tagging of `.jpg` files for stock photo
 sites. It reads a directory of images, reads their existing IPTC/EXIF metadata (title, keywords,
 geolocation), sends each image plus that context to a vision-capable AI model to generate a rich
 title/description/keywords, writes the new metadata back into the image file, and generates
@@ -40,24 +40,24 @@ Adobe Stock / Shutterstock compatible `.csv` upload sheets.
 Run from the project root (see [Gotchas](#gotchas) below):
 
 ```bash
-uv run metajot "<photo-folder>"
+uv run metajot
 ```
 
-Add `--editorial` to format the Shutterstock CSV description as an AP/Reuters-style
-editorial dateline (`"City, State/Country - Month Day Year: Description"`) for every photo
-in the folder, using IPTC location fields, GPS reverse-geocoding, or an AI-inferred guess
-from keywords, in that priority order. In the desktop GUI this is a per-photo checkbox
-instead, so you can mix editorial and regular photos in the same folder.
+This opens the desktop window. Pick a photo folder, click **Process with AI** to generate
+titles/descriptions/keywords/categories, review and edit them in the table, then click
+**Write Metadata & Export CSVs** to write them into the files and generate
+`adobe_stock.csv` / `shutterstock.csv` in that folder.
 
-```bash
-uv run metajot "<photo-folder>" --editorial
-```
+Tick a photo's **Editorial** checkbox to format its Shutterstock CSV description as an
+AP/Reuters-style editorial dateline (`"City, State/Country - Month Day Year: Description"`),
+using IPTC location fields, GPS reverse-geocoding, or an AI-inferred guess from keywords, in
+that priority order.
 
 ## Development
 
 ```bash
 uv run pytest -q                 # run the test suite
-uv run pytest tests/test_main.py::test_config_loads_defaults  # run a single test
+uv run pytest tests/test_config.py::test_config_loads_defaults  # run a single test
 uv run ruff check src tests      # lint
 uv run ruff check --fix src tests
 ```
@@ -69,4 +69,4 @@ uv run ruff check --fix src tests
   `config.toml` lives), or the AI calls will fail with a missing API key. Same applies if
   installed as a `uv tool`; only the `OPENAI_API_KEY` env var path is cwd-independent.
 - `tests/fixtures/` contains real sample `.jpg` photos used for manual end-to-end verification —
-  running the CLI against that directory mutates those files' embedded metadata in place.
+  processing that folder mutates those files' embedded metadata in place.
