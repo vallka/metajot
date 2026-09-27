@@ -36,6 +36,7 @@ class DetailDialog(QDialog):
 
         form.addRow("Filename:", self._line(state.path.name))
         form.addRow("Status:", self._line(state.status))
+        form.addRow("Editorial:", self._line("Yes" if state.editorial else "No"))
         form.addRow("Title:", self._line(state.title))
         form.addRow("Description:", self._text(state.description, height=110))
         form.addRow("Keywords:", self._text(", ".join(state.keywords), height=110))

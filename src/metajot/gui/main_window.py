@@ -32,66 +32,80 @@ from metajot.exporter import (
 )
 from metajot.gui.detail_dialog import DetailDialog
 from metajot.gui.row_state import RowState, load_thumbnail
+from metajot.gui.widgets import (
+    SORT_KEY_ROLE,
+    CheckableHeader,
+    PhotoDelegate,
+    SortableItem,
+)
 from metajot.gui.worker import ProcessingWorker
 from metajot.metadata import (
     ImageMetadata,
     read_metadata,
     resolve_deterministic_location,
+    write_editorial_flag,
     write_metadata,
 )
 
 THUMBNAIL_SIZE = 192
 
-COL_THUMB = 0
-COL_FILENAME = 1
+COL_PROCESS = 0
+COL_PHOTO = 1
 COL_TITLE = 2
 COL_EDITORIAL = 3
 COL_STATUS = 4
 COLUMN_COUNT = 5
 
-COLUMN_HEADERS = ["", "Filename", "Title", "Editorial", "Status"]
+COLUMN_HEADERS = ["Process", "Photo", "Title", "Editorial", "Status"]
+CHECKBOX_COLUMNS = (COL_PROCESS, COL_EDITORIAL)
 
-# Index into MainWindow.rows, stored on each row's filename item so a table
-# row can be mapped back to its RowState whatever the current sort order.
+PROCESS_TOOLTIP = "Include this photo in the next \"Process with AI\" run."
+EDITORIAL_TOOLTIP = (
+    "Editorial use: formats the Shutterstock description as an editorial "
+    'dateline ("City, State/Country - Month Day Year: Description") when '
+    "exporting CSVs. Saved in the photo by Write Metadata."
+)
+
+# Index into MainWindow.rows, stored on each row's photo item so a table row
+# can be mapped back to its RowState whatever the current sort order.
 ROW_INDEX_ROLE = Qt.ItemDataRole.UserRole
-# Explicit sort key for items whose display text isn't what should be sorted
-# on (the thumbnail, which has none).
-SORT_KEY_ROLE = Qt.ItemDataRole.UserRole + 1
 
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPINNER_INTERVAL_MS = 80
 
+STATUS_GENERATED = "Generated (unsaved)"
+STATUS_EDITORIAL_CHANGED = "Editorial changed (unsaved)"
 
-class SortableItem(QTableWidgetItem):
-    """Sorts case-insensitively by text, by check state for checkbox items,
-    or by an explicit SORT_KEY_ROLE value if set."""
 
-    def _sort_key(self):
-        # Not flags() & ItemIsUserCheckable: that flag is on by default for
-        # every item, whereas only real checkbox items have a check state.
-        if self.data(Qt.ItemDataRole.CheckStateRole) is not None:
-            return self.checkState().value
-        key = self.data(SORT_KEY_ROLE)
-        return key if key is not None else self.text().lower()
-
-    def __lt__(self, other: QTableWidgetItem) -> bool:
-        if isinstance(other, SortableItem):
-            return self._sort_key() < other._sort_key()
-        return super().__lt__(other)
+def _checkbox_item(checked: bool, tooltip: str) -> SortableItem:
+    item = SortableItem()
+    item.setFlags(
+        Qt.ItemFlag.ItemIsEnabled
+        | Qt.ItemFlag.ItemIsSelectable
+        | Qt.ItemFlag.ItemIsUserCheckable
+    )
+    item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+    item.setToolTip(tooltip)
+    return item
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MetaJot")
-        self.resize(1100, 800)
+        self.resize(1000, 800)
 
         self.directory: Optional[Path] = None
         self.rows: list[RowState] = []
         self.worker: Optional[ProcessingWorker] = None
-        self._processed_count = 0
+        self._job_count = 0
+        self._started_count = 0
+        self._finished_count = 0
         self._spinner_frame = 0
         self._activity_text = ""
+        # Set while items are created/filled programmatically, so their
+        # itemChanged signals aren't taken as user changes.
+        self._populating = False
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -102,6 +116,9 @@ class MainWindow(QMainWindow):
         self.select_btn.clicked.connect(self.select_folder)
         self.folder_label = QLabel("No folder selected")
         self.process_btn = QPushButton("Process with AI")
+        self.process_btn.setToolTip(
+            "Generate metadata for the photos ticked in the Process column."
+        )
         self.process_btn.clicked.connect(self.start_processing)
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setToolTip("Stop after the photo currently being processed.")
@@ -110,7 +127,7 @@ class MainWindow(QMainWindow):
         self.write_btn = QPushButton("Write Metadata")
         self.write_btn.setToolTip(
             "Save the generated title, description, keywords, location and "
-            "categories into the photo files."
+            "categories, and the Editorial flag, into the photo files."
         )
         self.write_btn.clicked.connect(self.write_metadata_clicked)
         self.export_btn = QPushButton("Export CSVs")
@@ -142,26 +159,44 @@ class MainWindow(QMainWindow):
         self.spinner_timer.timeout.connect(self._advance_spinner)
 
         self.table = QTableWidget(0, COLUMN_COUNT)
+        self.header = CheckableHeader(self.table)
+        self.table.setHorizontalHeader(self.header)
         self.table.setHorizontalHeaderLabels(COLUMN_HEADERS)
+        self.table.horizontalHeaderItem(COL_PROCESS).setToolTip(
+            "Tick the box to select/deselect all. " + PROCESS_TOOLTIP
+        )
+        self.table.horizontalHeaderItem(COL_EDITORIAL).setToolTip(
+            "Tick the box to select/deselect all. " + EDITORIAL_TOOLTIP
+        )
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
         self.table.setIconSize(QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+        self.table.setItemDelegateForColumn(COL_PHOTO, PhotoDelegate(self.table))
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(THUMBNAIL_SIZE + 8)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(COL_TITLE, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(COL_THUMB, THUMBNAIL_SIZE + 8)
-        self.table.setColumnWidth(COL_FILENAME, 220)
-        self.table.setColumnWidth(COL_EDITORIAL, 80)
-        self.table.setColumnWidth(COL_STATUS, 160)
-        self.table.cellClicked.connect(self._on_cell_clicked)
-        self.table.cellDoubleClicked.connect(
-            lambda row, _col: self._open_details(row)
+        # Fits each row to its thumbnail + filename, so landscape photos
+        # don't get a portrait-height row.
+        self.table.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
         )
+        for column in CHECKBOX_COLUMNS:
+            # Keeps the label clear of the check-all box drawn at the left.
+            self.table.horizontalHeaderItem(column).setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+        self.header.setSectionResizeMode(COL_TITLE, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(COL_PROCESS, 100)
+        self.table.setColumnWidth(COL_PHOTO, THUMBNAIL_SIZE + 16)
+        self.table.setColumnWidth(COL_EDITORIAL, 100)
+        self.table.setColumnWidth(COL_STATUS, 180)
+        self.table.cellClicked.connect(self._on_cell_clicked)
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        self.table.itemChanged.connect(self._on_item_changed)
+        self.header.toggled.connect(self._toggle_all)
         layout.addWidget(self.table)
 
+        self._refresh_header_checks()
         self._update_buttons()
 
     def select_folder(self) -> None:
@@ -177,6 +212,7 @@ class MainWindow(QMainWindow):
         self._load_images(images)
 
     def _load_images(self, images: list[Path]) -> None:
+        self._populating = True
         # Rows must be inserted unsorted, or they'd move while being filled.
         self.table.setSortingEnabled(False)
         self.rows = []
@@ -187,8 +223,9 @@ class MainWindow(QMainWindow):
             # writer keeps IPTC/EXIF/XMP in sync through, so reopening a
             # processed folder shows exactly what was last written, however
             # it was written (title/description/keywords/location all come
-            # from IPTC; the metajot:ProcessedAt marker comes from XMP).
+            # from IPTC; the metajot:ProcessedAt/Editorial flags from XMP).
             meta = read_metadata(path)
+            processed = bool(meta.processed_at)
             state = RowState(
                 path=path,
                 current_meta=meta,
@@ -200,56 +237,56 @@ class MainWindow(QMainWindow):
                 location=resolve_deterministic_location(meta),
                 adobe_category_id=meta.adobe_category_id,
                 shutterstock_categories=list(meta.shutterstock_categories),
-                processed=bool(meta.processed_at),
-                status="Done" if meta.processed_at else "Pending",
+                processed=processed,
+                saved_editorial=meta.editorial,
+                clean_status="Done" if processed else "Pending",
             )
             self.rows.append(state)
 
-            thumb_item = SortableItem()
-            thumb_item.setData(
+            # Unprocessed photos are pre-selected for the next AI run.
+            state.process_item = _checkbox_item(not processed, PROCESS_TOOLTIP)
+            self.table.setItem(index, COL_PROCESS, state.process_item)
+
+            photo_item = SortableItem(path.name)
+            photo_item.setData(
                 Qt.ItemDataRole.DecorationRole, load_thumbnail(path, THUMBNAIL_SIZE)
             )
-            thumb_item.setData(SORT_KEY_ROLE, path.name.lower())
-            thumb_item.setToolTip("Click to view details")
-            self.table.setItem(index, COL_THUMB, thumb_item)
-
-            filename_item = SortableItem(path.name)
-            filename_item.setData(ROW_INDEX_ROLE, index)
-            self.table.setItem(index, COL_FILENAME, filename_item)
+            photo_item.setData(SORT_KEY_ROLE, path.name.lower())
+            photo_item.setData(ROW_INDEX_ROLE, index)
+            photo_item.setToolTip("Click the thumbnail to view details")
+            self.table.setItem(index, COL_PHOTO, photo_item)
 
             state.title_item = SortableItem(state.title)
             state.title_item.setToolTip(state.title)
             self.table.setItem(index, COL_TITLE, state.title_item)
 
-            state.editorial_item = SortableItem()
-            state.editorial_item.setFlags(
-                Qt.ItemFlag.ItemIsEnabled
-                | Qt.ItemFlag.ItemIsSelectable
-                | Qt.ItemFlag.ItemIsUserCheckable
-            )
-            state.editorial_item.setCheckState(Qt.CheckState.Unchecked)
-            state.editorial_item.setToolTip(
-                "Format the Shutterstock description as an editorial dateline "
-                '("City, State/Country - Month Day Year: Description") for '
-                "this photo when exporting CSVs."
-            )
+            state.editorial_item = _checkbox_item(meta.editorial, EDITORIAL_TOOLTIP)
             self.table.setItem(index, COL_EDITORIAL, state.editorial_item)
 
-            state.status_item = SortableItem(state.status)
+            state.status_item = SortableItem(state.clean_status)
             self.table.setItem(index, COL_STATUS, state.status_item)
+            state.status = state.clean_status
 
         self.table.setSortingEnabled(True)
-        self.table.sortItems(COL_FILENAME, Qt.SortOrder.AscendingOrder)
+        self.table.sortItems(COL_PHOTO, Qt.SortOrder.AscendingOrder)
+        self._populating = False
+        self._refresh_header_checks()
         self._update_buttons()
 
     def _state_at(self, table_row: int) -> Optional[RowState]:
-        item = self.table.item(table_row, COL_FILENAME)
+        item = self.table.item(table_row, COL_PHOTO)
         if item is None:
             return None
         return self.rows[item.data(ROW_INDEX_ROLE)]
 
     def _on_cell_clicked(self, row: int, col: int) -> None:
-        if col == COL_THUMB:
+        if col == COL_PHOTO:
+            self._open_details(row)
+
+    def _on_cell_double_clicked(self, row: int, col: int) -> None:
+        # Double-clicking a checkbox cell would otherwise both toggle it and
+        # open the dialog; the photo column already opens it on one click.
+        if col not in CHECKBOX_COLUMNS and col != COL_PHOTO:
             self._open_details(row)
 
     def _open_details(self, table_row: int) -> None:
@@ -257,12 +294,63 @@ class MainWindow(QMainWindow):
         if state:
             DetailDialog(state, self).exec()
 
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        if self._populating or item.column() not in CHECKBOX_COLUMNS:
+            return
+        if item.column() == COL_EDITORIAL:
+            state = self._state_at(item.row())
+            if state:
+                self._refresh_status(state)
+        self._refresh_header_checks()
+        self._update_buttons()
+
+    def _toggle_all(self, column: int) -> None:
+        items = [self.table.item(row, column) for row in range(self.table.rowCount())]
+        all_checked = bool(items) and all(
+            i.checkState() == Qt.CheckState.Checked for i in items
+        )
+        new_state = Qt.CheckState.Unchecked if all_checked else Qt.CheckState.Checked
+        # Items are collected up front: with the table sorted by this column,
+        # each change re-sorts it, so re-reading item(row, ...) mid-loop
+        # would skip or repeat rows.
+        for item in items:
+            item.setCheckState(new_state)
+
+    def _refresh_header_checks(self) -> None:
+        for column in CHECKBOX_COLUMNS:
+            checked = sum(
+                1
+                for row in range(self.table.rowCount())
+                if self.table.item(row, column).checkState() == Qt.CheckState.Checked
+            )
+            if checked == 0:
+                state = Qt.CheckState.Unchecked
+            elif checked == self.table.rowCount():
+                state = Qt.CheckState.Checked
+            else:
+                state = Qt.CheckState.PartiallyChecked
+            self.header.set_check_state(column, state)
+
+    def _refresh_status(self, state: RowState) -> None:
+        if state.dirty:
+            state.set_status(STATUS_GENERATED)
+        elif state.editorial_changed:
+            state.set_status(STATUS_EDITORIAL_CHANGED)
+        else:
+            state.set_status(state.clean_status)
+
     def _update_buttons(self) -> None:
         busy = self.worker is not None
+        selected = sum(1 for r in self.rows if r.selected_for_processing)
+        self.process_btn.setText(
+            f"Process with AI ({selected})" if selected else "Process with AI"
+        )
         self.select_btn.setEnabled(not busy)
-        self.process_btn.setEnabled(bool(self.rows) and not busy)
+        self.process_btn.setEnabled(selected > 0 and not busy)
         self.cancel_btn.setVisible(busy)
-        self.write_btn.setEnabled(any(r.dirty for r in self.rows) and not busy)
+        self.write_btn.setEnabled(
+            any(r.has_unsaved_changes for r in self.rows) and not busy
+        )
         self.export_btn.setEnabled(any(r.processed for r in self.rows) and not busy)
 
     def _set_activity(self, text: str) -> None:
@@ -278,17 +366,27 @@ class MainWindow(QMainWindow):
         self._render_activity()
 
     def start_processing(self) -> None:
-        if not self.rows:
+        # Process in the order currently shown in the table.
+        jobs = []
+        for row in range(self.table.rowCount()):
+            index = self.table.item(row, COL_PHOTO).data(ROW_INDEX_ROLE)
+            state = self.rows[index]
+            if state.selected_for_processing:
+                jobs.append((index, state.path))
+        if not jobs:
             return
-        self._processed_count = 0
-        self.progress.setRange(0, len(self.rows))
+
+        self._job_count = len(jobs)
+        self._started_count = 0
+        self._finished_count = 0
+        self.progress.setRange(0, self._job_count)
         self.progress.setValue(0)
         self.progress.setVisible(True)
         self.activity_label.setVisible(True)
         self._set_activity("Starting...")
         self.spinner_timer.start()
 
-        self.worker = ProcessingWorker([r.path for r in self.rows])
+        self.worker = ProcessingWorker(jobs)
         self.worker.image_started.connect(self._on_image_started)
         self.worker.image_done.connect(self._on_image_done)
         self.worker.image_failed.connect(self._on_image_failed)
@@ -306,9 +404,11 @@ class MainWindow(QMainWindow):
     def _on_image_started(self, index: int) -> None:
         state = self.rows[index]
         state.set_status("Processing...")
+        self._started_count += 1
         if self.cancel_btn.isEnabled():
             self._set_activity(
-                f"Processing {index + 1} of {len(self.rows)}: {state.path.name}"
+                f"Processing {self._started_count} of {self._job_count}: "
+                f"{state.path.name}"
             )
 
     def _on_image_done(
@@ -329,7 +429,9 @@ class MainWindow(QMainWindow):
             )
         state.processed = True
         state.dirty = True
-        state.set_status("Generated (unsaved)")
+        self._refresh_status(state)
+        # Done - a re-run shouldn't redo it unless it's ticked again.
+        state.set_selected_for_processing(False)
         self._step_progress()
 
     def _on_image_failed(self, index: int, message: str) -> None:
@@ -337,8 +439,8 @@ class MainWindow(QMainWindow):
         self._step_progress()
 
     def _step_progress(self) -> None:
-        self._processed_count += 1
-        self.progress.setValue(self._processed_count)
+        self._finished_count += 1
+        self.progress.setValue(self._finished_count)
 
     def _on_all_done(self) -> None:
         cancelled = self.worker is not None and self.worker.stop_requested
@@ -352,8 +454,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Cancelled",
-                f"Processing cancelled after {self._processed_count} of "
-                f"{len(self.rows)} photo(s).",
+                f"Processing cancelled after {self._finished_count} of "
+                f"{self._job_count} photo(s).",
             )
 
     def closeEvent(self, event) -> None:
@@ -364,28 +466,37 @@ class MainWindow(QMainWindow):
             self.worker.wait()
         super().closeEvent(event)
 
-    def _write_dirty_rows(self) -> tuple[int, list[str]]:
-        """Writes every row with unsaved generated metadata into its file;
-        returns (written count, failed filenames)."""
+    def _write_unsaved_rows(self) -> tuple[int, list[str]]:
+        """Writes every row with unsaved changes into its file; returns
+        (written count, failed filenames)."""
         written = 0
         failures: list[str] = []
         for state in self.rows:
-            if not state.dirty:
+            if state.dirty:
+                success = write_metadata(
+                    state.path,
+                    state.title,
+                    state.description,
+                    state.keywords,
+                    state.adobe_category_id,
+                    state.shutterstock_categories,
+                    location=state.location,
+                    editorial=state.editorial,
+                )
+            elif state.editorial_changed:
+                # Only the flag changed - don't rewrite (or, for a photo
+                # never processed, stamp as processed) everything else.
+                success = write_editorial_flag(state.path, state.editorial)
+            else:
                 continue
-            success = write_metadata(
-                state.path,
-                state.title,
-                state.description,
-                state.keywords,
-                state.adobe_category_id,
-                state.shutterstock_categories,
-                location=state.location,
-            )
+
             if success:
                 written += 1
+                if state.dirty:
+                    state.clean_status = "Written"
                 state.dirty = False
-                state.processed = True
-                state.set_status("Written")
+                state.saved_editorial = state.editorial
+                self._refresh_status(state)
             else:
                 failures.append(state.path.name)
                 state.set_status("Write failed")
@@ -393,7 +504,7 @@ class MainWindow(QMainWindow):
         return written, failures
 
     def write_metadata_clicked(self) -> None:
-        written, failures = self._write_dirty_rows()
+        written, failures = self._write_unsaved_rows()
         if failures:
             QMessageBox.warning(
                 self,
@@ -409,15 +520,15 @@ class MainWindow(QMainWindow):
         if not self.directory:
             return
 
-        unsaved = sum(1 for r in self.rows if r.dirty)
+        unsaved = sum(1 for r in self.rows if r.has_unsaved_changes)
         if unsaved:
             answer = QMessageBox.question(
                 self,
                 "Unsaved changes",
-                f"{unsaved} photo(s) have generated metadata not yet written "
-                "to the files. Write them before exporting?\n\n"
-                "(Choosing No exports it anyway, without saving it into the "
-                "photos.)",
+                f"{unsaved} photo(s) have changes not yet written to the "
+                "files. Write them before exporting?\n\n"
+                "(Choosing No exports them anyway, without saving them into "
+                "the photos.)",
                 QMessageBox.StandardButton.Yes
                 | QMessageBox.StandardButton.No
                 | QMessageBox.StandardButton.Cancel,
@@ -425,7 +536,7 @@ class MainWindow(QMainWindow):
             if answer == QMessageBox.StandardButton.Cancel:
                 return
             if answer == QMessageBox.StandardButton.Yes:
-                _, failures = self._write_dirty_rows()
+                _, failures = self._write_unsaved_rows()
                 if failures:
                     QMessageBox.warning(
                         self,

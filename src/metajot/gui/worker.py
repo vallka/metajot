@@ -11,28 +11,30 @@ class ProcessingWorker(QThread):
     stop() takes effect between photos - an in-flight AI request for the
     current photo is allowed to finish."""
 
+    # Signals carry the caller's index for each job (e.g. its position in the
+    # full photo list), not the position within this batch.
     image_started = Signal(int)
-    image_done = Signal(int, object, object)  # row, ImageMetadata, AIResponse
+    image_done = Signal(int, object, object)  # index, ImageMetadata, AIResponse
     image_failed = Signal(int, str)
     finished_all = Signal()
 
-    def __init__(self, image_paths: list[Path]):
+    def __init__(self, jobs: list[tuple[int, Path]]):
         super().__init__()
-        self.image_paths = image_paths
+        self.jobs = jobs
         self.stop_requested = False
 
     def stop(self) -> None:
         self.stop_requested = True
 
     def run(self) -> None:
-        for row, path in enumerate(self.image_paths):
+        for index, path in self.jobs:
             if self.stop_requested:
                 break
-            self.image_started.emit(row)
+            self.image_started.emit(index)
             try:
                 current_meta: ImageMetadata = read_metadata(path)
                 ai_data: AIResponse = generate_metadata(path, current_meta)
-                self.image_done.emit(row, current_meta, ai_data)
+                self.image_done.emit(index, current_meta, ai_data)
             except Exception as e:
-                self.image_failed.emit(row, str(e))
+                self.image_failed.emit(index, str(e))
         self.finished_all.emit()

@@ -29,13 +29,20 @@ class RowState:
     adobe_category_id: Optional[str] = None
     shutterstock_categories: list[str] = field(default_factory=list)
     status: str = "Pending"
+    # Status to show when there are no unsaved changes ("Pending", "Done",
+    # "Written").
+    clean_status: str = "Pending"
     # Has MetaJot metadata (on disk from a previous run, or freshly
     # generated) - i.e. categories etc. are meaningful enough to export.
     processed: bool = False
     # Has AI-generated values not yet written to the file.
     dirty: bool = False
+    # The editorial flag as last read from / written to the file, to tell
+    # whether the Editorial checkbox has an unsaved change.
+    saved_editorial: bool = False
     # The table items showing this row, which stay attached to it however
     # the table is sorted.
+    process_item: Optional[QTableWidgetItem] = None
     title_item: Optional[QTableWidgetItem] = None
     editorial_item: Optional[QTableWidgetItem] = None
     status_item: Optional[QTableWidgetItem] = None
@@ -52,10 +59,29 @@ class RowState:
 
     @property
     def editorial(self) -> bool:
-        return bool(
-            self.editorial_item
-            and self.editorial_item.checkState() == Qt.CheckState.Checked
-        )
+        return _is_checked(self.editorial_item)
+
+    @property
+    def editorial_changed(self) -> bool:
+        return self.editorial != self.saved_editorial
+
+    @property
+    def has_unsaved_changes(self) -> bool:
+        return self.dirty or self.editorial_changed
+
+    @property
+    def selected_for_processing(self) -> bool:
+        return _is_checked(self.process_item)
+
+    def set_selected_for_processing(self, selected: bool) -> None:
+        if self.process_item:
+            self.process_item.setCheckState(
+                Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked
+            )
+
+
+def _is_checked(item: Optional[QTableWidgetItem]) -> bool:
+    return bool(item and item.checkState() == Qt.CheckState.Checked)
 
 
 def load_thumbnail(path: Path, size: int) -> QPixmap:

@@ -52,7 +52,10 @@ the table plus what's already embedded in the files, so a folder reopened later 
    structured `Location`. It's shown in editable City/State/Country columns and saved into the file.
 4. **[metadata.py](src/metajot/metadata.py)** `write_metadata()` — writes title/description/
    keywords/categories/location into IPTC (via `iptcinfo3`), mirrored into EXIF and XMP
-   ([xmp.py](src/metajot/xmp.py)), plus a `metajot:ProcessedAt` XMP marker.
+   ([xmp.py](src/metajot/xmp.py)), plus MetaJot's own XMP properties: `metajot:ProcessedAt`
+   (marks the file as processed) and `metajot:Editorial` (the per-photo Editorial checkbox).
+   An Editorial-only change is saved with `write_editorial_flag()`, which touches just that
+   property, so an unprocessed photo isn't stamped as processed.
 5. **[exporter.py](src/metajot/exporter.py)** — writes `adobe_stock.csv` (Filename, Title,
    Keywords, Category) and `shutterstock.csv` (Filename, Description, Keywords, Categories,
    Illustration, Mature Content, Editorial) for all processed photos in the folder. Editorial rows

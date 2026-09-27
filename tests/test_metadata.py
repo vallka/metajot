@@ -12,6 +12,7 @@ from metajot.metadata import (
     _exif_datetime_to_iptc_date,
     read_metadata,
     resolve_deterministic_location,
+    write_editorial_flag,
     write_metadata,
 )
 from metajot.xmp import read_xmp_packet, write_xmp_metadata
@@ -181,3 +182,28 @@ def test_read_metadata_falls_back_to_xmp_location(image_copy):
     rome = Location(city="Rome", country="Italy")
     write_xmp_metadata(image_copy, "T", "D", ["k"], location=rome)
     assert read_metadata(image_copy).embedded_location() == rome
+
+
+def test_editorial_flag_round_trips_through_write_metadata(image_copy):
+    assert read_metadata(image_copy).editorial is False
+    write_metadata(image_copy, "T", "D", ["k"], editorial=True)
+    assert read_metadata(image_copy).editorial is True
+    write_metadata(image_copy, "T", "D", ["k"], editorial=False)
+    assert read_metadata(image_copy).editorial is False
+
+
+def test_write_metadata_without_editorial_keeps_existing_flag(image_copy):
+    write_metadata(image_copy, "T", "D", ["k"], editorial=True)
+    write_metadata(image_copy, "T2", "D2", ["k2"])
+    assert read_metadata(image_copy).editorial is True
+
+
+def test_write_editorial_flag_only_touches_the_flag(image_copy):
+    before = read_metadata(image_copy)
+    assert write_editorial_flag(image_copy, True) is True
+    after = read_metadata(image_copy)
+    assert after.editorial is True
+    # Not stamped as processed, and nothing else changed.
+    assert after.processed_at is None
+    assert after.title == before.title
+    assert after.keywords == before.keywords

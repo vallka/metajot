@@ -9,9 +9,11 @@ from iptcinfo3 import IPTCInfo
 from metajot.location import Location, location_from_city, reverse_geocode
 from metajot.sanitize import to_ascii
 from metajot.xmp import (
+    read_metajot_editorial,
     read_metajot_processed_at,
     read_xmp_location,
     read_xmp_packet,
+    write_xmp_editorial,
     write_xmp_metadata,
 )
 
@@ -47,6 +49,8 @@ class ImageMetadata:
     # marker into this file - the authoritative "already processed" signal,
     # independent of whether category data happens to be filled in.
     processed_at: Optional[str] = None
+    # XMP metajot:Editorial - whether the photo is for editorial use.
+    editorial: bool = False
 
     def embedded_location(self) -> Optional[Location]:
         location = Location(
@@ -136,6 +140,7 @@ def read_metadata(image_path: Path) -> ImageMetadata:
         xmp_xml = read_xmp_packet(image_path.read_bytes())
         if xmp_xml:
             meta.processed_at = read_metajot_processed_at(xmp_xml)
+            meta.editorial = read_metajot_editorial(xmp_xml)
             xmp_location = read_xmp_location(xmp_xml)
             if xmp_location and not meta.embedded_location():
                 meta.iptc_city = xmp_location.city
@@ -200,11 +205,13 @@ def write_metadata(
     adobe_category_id: Optional[str] = None,
     shutterstock_categories: Optional[List[str]] = None,
     location: Optional[Location] = None,
+    editorial: Optional[bool] = None,
 ) -> bool:
     """Writes new IPTC Title, Description, Keywords, and categories to the
     image. If a non-empty location is given, it's written to the IPTC
     City/Province-State/Country fields (and XMP) too, with empty parts
-    cleared; otherwise the file's existing location fields are left as-is."""
+    cleared; otherwise the file's existing location fields are left as-is.
+    The editorial flag, if given, is saved in XMP (metajot:Editorial)."""
     try:
         iptc = IPTCInfo(image_path, force=True)
 
@@ -266,8 +273,20 @@ def write_metadata(
             f.write(exif_img.get_file())
 
         return write_xmp_metadata(
-            image_path, title, description, keywords, location=location
+            image_path,
+            title,
+            description,
+            keywords,
+            location=location,
+            editorial=editorial,
         )
     except Exception as e:
         print(f"Error writing metadata to {image_path}: {e}")
         return False
+
+
+def write_editorial_flag(image_path: Path, editorial: bool) -> bool:
+    """Saves only the editorial flag (XMP metajot:Editorial), e.g. when it's
+    changed on a photo whose other metadata is already written or which
+    hasn't been processed at all - without stamping it as processed."""
+    return write_xmp_editorial(image_path, editorial)
