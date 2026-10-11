@@ -26,6 +26,8 @@ from typing import Any, Optional
 import keyring
 import tomli_w
 
+from metajot.usage import ModelPrice
+
 APP_NAME = "MetaJot"
 KEYRING_SERVICE = "MetaJot"
 KEYRING_USERNAME = "openai_api_key"
@@ -73,6 +75,10 @@ class AIConfig:
     # Where api_key came from: "env", "keyring", "config" or None.
     api_key_source: Optional[str] = None
     max_image_dimension: int = DEFAULT_MAX_IMAGE_DIMENSION
+    # USD per 1M tokens from config.toml's [ai] input_price / output_price
+    # (and optional cached_input_price), replacing the built-in price list
+    # (usage.MODEL_PRICES) for cost estimates.
+    price_override: Optional[ModelPrice] = None
 
 
 @dataclass
@@ -114,6 +120,18 @@ def set_stored_api_key(api_key: Optional[str]) -> None:
         pass  # nothing stored
 
 
+def _price_override(ai_data: dict[str, Any]) -> Optional[ModelPrice]:
+    input_price = ai_data.get("input_price")
+    output_price = ai_data.get("output_price")
+    if input_price is None or output_price is None:
+        return None
+    return ModelPrice(
+        input=float(input_price),
+        cached_input=float(ai_data.get("cached_input_price", input_price)),
+        output=float(output_price),
+    )
+
+
 def load_config(
     project_config_path: Path = PROJECT_CONFIG_PATH,
     user_path: Optional[Path] = None,
@@ -136,6 +154,7 @@ def load_config(
         max_image_dimension=int(
             ai_data.get("max_image_dimension") or DEFAULT_MAX_IMAGE_DIMENSION
         ),
+        price_override=_price_override(ai_data),
     )
 
     if env_key := os.getenv("OPENAI_API_KEY"):

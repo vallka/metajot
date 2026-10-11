@@ -5,6 +5,7 @@ from PySide6.QtCore import QThread, Signal
 
 from metajot.ai import AIResponse, generate_metadata
 from metajot.metadata import ImageMetadata, read_metadata
+from metajot.usage import TokenUsage
 
 
 class ProcessingWorker(QThread):
@@ -15,7 +16,8 @@ class ProcessingWorker(QThread):
     # Signals carry the caller's index for each job (e.g. its position in the
     # full photo list), not the position within this batch.
     image_started = Signal(int)
-    image_done = Signal(int, object, object)  # index, ImageMetadata, AIResponse
+    # index, ImageMetadata, AIResponse, TokenUsage
+    image_done = Signal(int, object, object, object)
     image_failed = Signal(int, str)
     finished_all = Signal()
 
@@ -37,8 +39,10 @@ class ProcessingWorker(QThread):
             self.image_started.emit(index)
             try:
                 current_meta: ImageMetadata = context or read_metadata(path)
-                ai_data: AIResponse = generate_metadata(path, current_meta)
-                self.image_done.emit(index, current_meta, ai_data)
+                ai_data: AIResponse
+                usage: TokenUsage
+                ai_data, usage = generate_metadata(path, current_meta)
+                self.image_done.emit(index, current_meta, ai_data, usage)
             except Exception as e:
                 self.image_failed.emit(index, str(e))
         self.finished_all.emit()

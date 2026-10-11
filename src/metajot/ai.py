@@ -18,6 +18,7 @@ from metajot.location import (
 )
 from metajot.metadata import ImageMetadata, resolve_deterministic_location
 from metajot.sanitize import sanitize_shutterstock_description, sanitize_typography
+from metajot.usage import TokenUsage, price_for_model, usage_from_response
 
 
 class AdobeStockCategory(str, Enum):
@@ -188,10 +189,13 @@ def encode_image(image_path: Path, max_dimension: int) -> str:
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
-def generate_metadata(image_path: Path, current_meta: ImageMetadata) -> AIResponse:
+def generate_metadata(
+    image_path: Path, current_meta: ImageMetadata
+) -> Tuple[AIResponse, TokenUsage]:
     """
     Sends the image and its current metadata to the configured AI model
-    to generate a new optimized title, description, and keywords.
+    to generate a new optimized title, description, and keywords. Also
+    returns the request's token usage and estimated cost.
     """
     if not settings.ai.api_key:
         raise ValueError(
@@ -255,6 +259,12 @@ def generate_metadata(image_path: Path, current_meta: ImageMetadata) -> AIRespon
                 response_format=AIResponse,
             )
             parsed = response.choices[0].message.parsed
+            # Priced by the model that actually answered (e.g. a dated
+            # snapshot), unless prices are set in config.toml.
+            price = settings.ai.price_override or price_for_model(
+                response.model or settings.ai.model
+            )
+            usage = usage_from_response(response, price)
             parsed.title = _truncate_at_word_boundary(
                 sanitize_typography(parsed.title.strip()), MAX_TITLE_CHARS
             )
@@ -270,7 +280,7 @@ def generate_metadata(image_path: Path, current_meta: ImageMetadata) -> AIRespon
                 == parsed.shutterstock_category_primary
             ):
                 parsed.shutterstock_category_secondary = None
-            return parsed
+            return parsed, usage
         except RateLimitError:
             if attempt == MAX_RATE_LIMIT_RETRIES:
                 raise

@@ -7,8 +7,10 @@ from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import QTableWidgetItem
 
 from metajot.ai import ADOBE_CATEGORY_IDS
+from metajot.gui.widgets import SORT_KEY_ROLE
 from metajot.location import Location
 from metajot.metadata import ImageMetadata
+from metajot.usage import TokenUsage
 
 # Reverse of ai.ADOBE_CATEGORY_IDS, to map the numeric ID stored on disk back
 # to the category name shown to the user.
@@ -42,6 +44,9 @@ class RowState:
     # The editorial flag as last read from / written to the file, to tell
     # whether the Editorial checkbox has an unsaved change.
     saved_editorial: bool = False
+    # Tokens/cost of this session's last AI run for the photo, shown under
+    # its status.
+    usage: Optional[TokenUsage] = None
     # The table items showing this row, which stay attached to it however
     # the table is sorted.
     process_item: Optional[QTableWidgetItem] = None
@@ -51,8 +56,17 @@ class RowState:
 
     def set_status(self, status: str) -> None:
         self.status = status
-        if self.status_item:
-            self.status_item.setText(status)
+        if not self.status_item:
+            return
+        text = status
+        tooltip = ""
+        if self.usage:
+            text += "\n" + self.usage.short_text()
+            tooltip = "Last AI run:\n" + self.usage.details_text()
+        self.status_item.setText(text)
+        self.status_item.setToolTip(tooltip)
+        # Sorted by the status alone, not the usage line under it.
+        self.status_item.setData(SORT_KEY_ROLE, status.lower())
 
     def set_title(self, title: str) -> None:
         self.title = title

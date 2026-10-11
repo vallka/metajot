@@ -1,9 +1,12 @@
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QEventLoop, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -51,6 +54,7 @@ from metajot.metadata import (
     write_editorial_flag,
     write_metadata,
 )
+from metajot.usage import TokenUsage, format_cost
 
 THUMBNAIL_SIZE = 192
 MAX_RECENT_FOLDERS = 10
@@ -108,8 +112,14 @@ class MainWindow(QMainWindow):
         self._job_count = 0
         self._started_count = 0
         self._finished_count = 0
+        self._failed_count = 0
+        # Summed token usage of the current/last AI run.
+        self._run_usage: Optional[TokenUsage] = None
         self._spinner_frame = 0
         self._activity_text = ""
+        # Set while files are read/written on the UI thread (see
+        # _file_activity()).
+        self._file_busy = False
         # Set while items are created/filled programmatically, so their
         # itemChanged signals aren't taken as user changes.
         self._populating = False
@@ -290,54 +300,56 @@ class MainWindow(QMainWindow):
         self.rows = []
         self.table.setRowCount(len(images))
 
-        for index, path in enumerate(images):
-            # read_metadata() is the single "master" place MetaJot's own
-            # writer keeps IPTC/EXIF/XMP in sync through, so reopening a
-            # processed folder shows exactly what was last written, however
-            # it was written (title/description/keywords/location all come
-            # from IPTC; the metajot:ProcessedAt/Editorial flags from XMP).
-            meta = read_metadata(path)
-            processed = bool(meta.processed_at)
-            state = RowState(
-                path=path,
-                current_meta=meta,
-                title=meta.title or "",
-                description=meta.description or "",
-                keywords=list(meta.keywords),
-                # The embedded location, or one reverse-geocoded from GPS if
-                # there's none yet - the latter gets saved on the next write.
-                location=resolve_deterministic_location(meta),
-                adobe_category_id=meta.adobe_category_id,
-                shutterstock_categories=list(meta.shutterstock_categories),
-                processed=processed,
-                saved_editorial=meta.editorial,
-                clean_status="Done" if processed else "Pending",
-            )
-            self.rows.append(state)
+        with self._file_activity(len(images)) as step:
+            for index, path in enumerate(images):
+                step(f"Reading {index + 1} of {len(images)}: {path.name}")
+                # read_metadata() is the single "master" place MetaJot's own
+                # writer keeps IPTC/EXIF/XMP in sync through, so reopening a
+                # processed folder shows exactly what was last written, however
+                # it was written (title/description/keywords/location all come
+                # from IPTC; the metajot:ProcessedAt/Editorial flags from XMP).
+                meta = read_metadata(path)
+                processed = bool(meta.processed_at)
+                state = RowState(
+                    path=path,
+                    current_meta=meta,
+                    title=meta.title or "",
+                    description=meta.description or "",
+                    keywords=list(meta.keywords),
+                    # The embedded location, or one reverse-geocoded from GPS if
+                    # there's none yet - the latter gets saved on the next write.
+                    location=resolve_deterministic_location(meta),
+                    adobe_category_id=meta.adobe_category_id,
+                    shutterstock_categories=list(meta.shutterstock_categories),
+                    processed=processed,
+                    saved_editorial=meta.editorial,
+                    clean_status="Done" if processed else "Pending",
+                )
+                self.rows.append(state)
 
-            # Unprocessed photos are pre-selected for the next AI run.
-            state.process_item = _checkbox_item(not processed, PROCESS_TOOLTIP)
-            self.table.setItem(index, COL_PROCESS, state.process_item)
+                # Unprocessed photos are pre-selected for the next AI run.
+                state.process_item = _checkbox_item(not processed, PROCESS_TOOLTIP)
+                self.table.setItem(index, COL_PROCESS, state.process_item)
 
-            photo_item = SortableItem(path.name)
-            photo_item.setData(
-                Qt.ItemDataRole.DecorationRole, load_thumbnail(path, THUMBNAIL_SIZE)
-            )
-            photo_item.setData(SORT_KEY_ROLE, path.name.lower())
-            photo_item.setData(ROW_INDEX_ROLE, index)
-            photo_item.setToolTip("Click the thumbnail to view details")
-            self.table.setItem(index, COL_PHOTO, photo_item)
+                photo_item = SortableItem(path.name)
+                photo_item.setData(
+                    Qt.ItemDataRole.DecorationRole, load_thumbnail(path, THUMBNAIL_SIZE)
+                )
+                photo_item.setData(SORT_KEY_ROLE, path.name.lower())
+                photo_item.setData(ROW_INDEX_ROLE, index)
+                photo_item.setToolTip("Click the thumbnail to view details")
+                self.table.setItem(index, COL_PHOTO, photo_item)
 
-            state.title_item = SortableItem(state.title)
-            state.title_item.setToolTip(state.title)
-            self.table.setItem(index, COL_TITLE, state.title_item)
+                state.title_item = SortableItem(state.title)
+                state.title_item.setToolTip(state.title)
+                self.table.setItem(index, COL_TITLE, state.title_item)
 
-            state.editorial_item = _checkbox_item(meta.editorial, EDITORIAL_TOOLTIP)
-            self.table.setItem(index, COL_EDITORIAL, state.editorial_item)
+                state.editorial_item = _checkbox_item(meta.editorial, EDITORIAL_TOOLTIP)
+                self.table.setItem(index, COL_EDITORIAL, state.editorial_item)
 
-            state.status_item = SortableItem(state.clean_status)
-            self.table.setItem(index, COL_STATUS, state.status_item)
-            state.status = state.clean_status
+                state.status_item = SortableItem(state.clean_status)
+                self.table.setItem(index, COL_STATUS, state.status_item)
+                state.status = state.clean_status
 
         self.table.setSortingEnabled(True)
         self.table.sortItems(COL_PHOTO, Qt.SortOrder.AscendingOrder)
@@ -431,7 +443,7 @@ class MainWindow(QMainWindow):
             state.set_status(state.clean_status)
 
     def _update_buttons(self) -> None:
-        busy = self.worker is not None
+        busy = self.worker is not None or self._file_busy
         selected = sum(1 for r in self.rows if r.selected_for_processing)
         self.process_btn.setText(
             f"Process with AI ({selected})" if selected else "Process with AI"
@@ -457,6 +469,42 @@ class MainWindow(QMainWindow):
     def _advance_spinner(self) -> None:
         self._spinner_frame = (self._spinner_frame + 1) % len(SPINNER_FRAMES)
         self._render_activity()
+
+    @contextmanager
+    def _file_activity(self, total: int) -> Iterator[Callable[[str], None]]:
+        """Shows the spinner and a progress bar while files are read or
+        written on the UI thread, so the window doesn't look frozen. Yields
+        a step(text) to call before each file: it shows the text and
+        repaints the window, holding back mouse/keyboard input until the
+        whole operation is finished."""
+        self._file_busy = True
+        self._update_buttons()
+        self.progress.setRange(0, total)
+        self.progress.setValue(0)
+        self.progress.setVisible(True)
+        self.activity_label.setVisible(True)
+        self.spinner_timer.start()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        done = -1
+
+        def step(text: str) -> None:
+            nonlocal done
+            done += 1
+            self.progress.setValue(done)
+            self._set_activity(text)
+            QApplication.processEvents(
+                QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+            )
+
+        try:
+            yield step
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.spinner_timer.stop()
+            self.progress.setVisible(False)
+            self.activity_label.setVisible(False)
+            self._file_busy = False
+            self._update_buttons()
 
     def start_processing(self) -> None:
         if not settings.ai.api_key:
@@ -507,6 +555,8 @@ class MainWindow(QMainWindow):
         self._job_count = len(jobs)
         self._started_count = 0
         self._finished_count = 0
+        self._failed_count = 0
+        self._run_usage = None
         self.progress.setRange(0, self._job_count)
         self.progress.setValue(0)
         self.progress.setVisible(True)
@@ -531,18 +581,29 @@ class MainWindow(QMainWindow):
 
     def _on_image_started(self, index: int) -> None:
         state = self.rows[index]
+        # The previous run's usage no longer describes this photo.
+        state.usage = None
         state.set_status("Processing...")
         self._started_count += 1
         if self.cancel_btn.isEnabled():
-            self._set_activity(
+            text = (
                 f"Processing {self._started_count} of {self._job_count}: "
                 f"{state.path.name}"
             )
+            if self._run_usage:
+                text += f"  ({self._run_usage.short_text()} so far)"
+            self._set_activity(text)
 
     def _on_image_done(
-        self, index: int, current_meta: ImageMetadata, ai_data: AIResponse
+        self,
+        index: int,
+        current_meta: ImageMetadata,
+        ai_data: AIResponse,
+        usage: TokenUsage,
     ) -> None:
         state = self.rows[index]
+        state.usage = usage
+        self._run_usage = usage if self._run_usage is None else self._run_usage + usage
         state.current_meta = current_meta
         state.set_title(ai_data.title)
         state.title_item.setToolTip(ai_data.title)
@@ -567,6 +628,7 @@ class MainWindow(QMainWindow):
 
     def _on_image_failed(self, index: int, message: str) -> None:
         self.rows[index].set_status(f"Error: {message}")
+        self._failed_count += 1
         self._step_progress()
 
     def _step_progress(self) -> None:
@@ -581,15 +643,40 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
         self.activity_label.setVisible(False)
         self._update_buttons()
+
+        succeeded = self._finished_count - self._failed_count
         if cancelled:
-            QMessageBox.information(
-                self,
-                "Cancelled",
-                f"Processing cancelled after {self._finished_count} of "
-                f"{self._job_count} photo(s).",
+            title = "Processing cancelled"
+            summary = (
+                f"Cancelled after {self._finished_count} of "
+                f"{self._job_count} photo(s)."
             )
+        else:
+            title = "Processing complete"
+            summary = f"Processed {succeeded} photo(s)."
+        if self._failed_count:
+            summary += f" {self._failed_count} failed - see the Status column."
+        if self._run_usage:
+            summary += (
+                f"\n\nModel: {settings.ai.model}\n" + self._run_usage.details_text()
+            )
+            if succeeded > 1 and self._run_usage.cost is not None:
+                summary += (
+                    " (~"
+                    + format_cost(self._run_usage.cost / succeeded)
+                    + " per photo)"
+                )
+            summary += (
+                "\n\nThe cost is an estimate from list prices; actual billing "
+                "may differ (e.g. free tokens for data sharing)."
+            )
+        QMessageBox.information(self, title, summary)
 
     def closeEvent(self, event) -> None:
+        # Files are mid-read/write on this thread - see _file_activity().
+        if self._file_busy:
+            event.ignore()
+            return
         # Let the worker finish its current photo rather than killing the
         # thread mid-write/mid-request.
         if self.worker:
@@ -602,42 +689,43 @@ class MainWindow(QMainWindow):
         (written count, failed filenames)."""
         written = 0
         failures: list[str] = []
-        for state in self.rows:
-            if state.dirty or state.edited:
-                success = write_metadata(
-                    state.path,
-                    state.title,
-                    state.description,
-                    state.keywords,
-                    state.adobe_category_id,
-                    state.shutterstock_categories,
-                    location=state.location,
-                    editorial=state.editorial,
-                    # Manual edits alone don't make a photo "processed" -
-                    # it should still come up ticked for the AI next time.
-                    mark_processed=state.processed,
-                )
-            elif state.editorial_changed:
-                # Only the flag changed - don't rewrite (or, for a photo
-                # never processed, stamp as processed) everything else.
-                success = write_editorial_flag(state.path, state.editorial)
-            else:
-                continue
-
-            if success:
-                written += 1
+        to_write = [r for r in self.rows if r.has_unsaved_changes]
+        with self._file_activity(len(to_write)) as step:
+            for position, state in enumerate(to_write, start=1):
+                step(f"Writing {position} of {len(to_write)}: {state.path.name}")
                 if state.dirty or state.edited:
-                    state.clean_status = (
-                        "Written" if state.processed else "Pending (edits saved)"
+                    success = write_metadata(
+                        state.path,
+                        state.title,
+                        state.description,
+                        state.keywords,
+                        state.adobe_category_id,
+                        state.shutterstock_categories,
+                        location=state.location,
+                        editorial=state.editorial,
+                        # Manual edits alone don't make a photo "processed" -
+                        # it should still come up ticked for the AI next time.
+                        mark_processed=state.processed,
                     )
-                state.dirty = False
-                state.edited = False
-                state.saved_editorial = state.editorial
-                self._refresh_status(state)
-            else:
-                failures.append(state.path.name)
-                state.set_status("Write failed")
-        self._update_buttons()
+                else:
+                    # Only the Editorial flag changed - don't rewrite (or,
+                    # for a photo never processed, stamp as processed)
+                    # everything else.
+                    success = write_editorial_flag(state.path, state.editorial)
+
+                if success:
+                    written += 1
+                    if state.dirty or state.edited:
+                        state.clean_status = (
+                            "Written" if state.processed else "Pending (edits saved)"
+                        )
+                    state.dirty = False
+                    state.edited = False
+                    state.saved_editorial = state.editorial
+                    self._refresh_status(state)
+                else:
+                    failures.append(state.path.name)
+                    state.set_status("Write failed")
         return written, failures
 
     def write_metadata_clicked(self) -> None:
