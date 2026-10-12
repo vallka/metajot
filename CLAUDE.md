@@ -24,7 +24,19 @@ uv run ruff check src tests      # lint
 uv run ruff check --fix src tests
 ```
 
-There is no separate build step (pure Python, hatchling backend).
+There is no build step for development (pure Python, hatchling backend). Standalone apps are
+built with PyInstaller from [packaging/metajot.spec](packaging/metajot.spec):
+
+```bash
+uv run --group build pyinstaller packaging/metajot.spec --noconfirm   # -> dist/MetaJot/MetaJot.exe (or dist/MetaJot.app)
+```
+
+PyInstaller can't cross-compile, so the macOS app is built by
+[.github/workflows/build.yml](.github/workflows/build.yml) (Windows zip, macOS arm64 and Intel dmgs): run it
+by hand from the Actions tab, or push a `v*` tag to also publish a GitHub Release. The builds are
+unsigned, so Windows SmartScreen and macOS Gatekeeper warn on first launch. The spec filters out
+unused Qt parts (Quick/QML, PDF, software OpenGL, translations); if a new feature needs one of
+them, update `UNUSED_QT` there.
 
 The app icon's source is [src/metajot/data/icon.svg](src/metajot/data/icon.svg); after editing it,
 regenerate `icon.ico` (all Windows sizes) with `uv run python scripts/build_icon.py`. The version

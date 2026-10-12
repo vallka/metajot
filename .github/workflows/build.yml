@@ -1,0 +1,86 @@
+# Builds the standalone Windows and macOS apps with PyInstaller
+# (packaging/metajot.spec). Each platform has to be built on that platform.
+#
+# - Run it by hand from the Actions tab ("Run workflow"): the builds are
+#   attached to the run as downloadable artifacts.
+# - Push a version tag (git tag v0.1.0a1 && git push origin v0.1.0a1): the
+#   builds are also published as a GitHub Release (a pre-release for
+#   alpha/beta/rc versions).
+name: Build apps
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          # An arm64 app doesn't run on Intel Macs (Rosetta only goes the
+          # other way), so each gets its own build.
+          - os: macos-latest
+            platform: macos-arm64
+          # GitHub's last Intel macOS runner image.
+          - os: macos-15-intel
+            platform: macos-intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --locked --group build
+
+      - name: Test
+        run: uv run pytest -q
+
+      - name: Build
+        run: uv run pyinstaller packaging/metajot.spec --noconfirm
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = uv version --short
+          Compress-Archive -Path dist/MetaJot -DestinationPath "MetaJot-$version-${{ matrix.platform }}.zip"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          version=$(uv version --short)
+          hdiutil create -volname MetaJot -srcfolder dist/MetaJot.app -ov \
+            -format UDZO "MetaJot-$version-${{ matrix.platform }}.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MetaJot-${{ matrix.platform }}
+          path: |
+            MetaJot-*.zip
+            MetaJot-*.dmg
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            MetaJot-*.zip
+            MetaJot-*.dmg
+          prerelease: ${{ contains(github.ref_name, 'a') || contains(github.ref_name, 'b') || contains(github.ref_name, 'rc') }}
+          generate_release_notes: true
