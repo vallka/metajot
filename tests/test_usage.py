@@ -19,6 +19,9 @@ def test_price_for_model_matches_longest_prefix():
     assert price_for_model("gpt-5-mini-2025-08-07") == MODEL_PRICES["gpt-5-mini"]
     assert price_for_model("gpt-5") == MODEL_PRICES["gpt-5"]
     assert price_for_model("gpt-4o-mini") == MODEL_PRICES["gpt-4o-mini"]
+    assert price_for_model("gpt-6-luna") == MODEL_PRICES["gpt-6-luna"]
+    # "gpt-5.4-mini" must not fall back to "gpt-5" (prefix needs a "-").
+    assert price_for_model("gpt-5.4-mini") == MODEL_PRICES["gpt-5.4-mini"]
 
 
 def test_price_for_model_unknown():

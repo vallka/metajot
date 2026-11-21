@@ -19,17 +19,37 @@ class ModelPrice:
     output: float
 
 
-# OpenAI list prices (standard tier). Matched by longest prefix, so dated
-# snapshots like "gpt-5-mini-2025-08-07" use their base model's price.
+# OpenAI list prices (Standard tier, short context <=272K input tokens - a
+# photo request is a few thousand), from developers.openai.com/api/docs/pricing
+# as of 2026-11-21. Matched by longest prefix, so dated snapshots like
+# "gpt-5-mini-2025-08-07" use their base model's price.
 MODEL_PRICES: dict[str, ModelPrice] = {
+    "gpt-6.2-astra": ModelPrice(8.00, 0.40, 40.00),
+    "gpt-6.2-sol": ModelPrice(2.00, 0.10, 10.00),
+    "gpt-6-astra": ModelPrice(10.00, 1.00, 50.00),
+    "gpt-6.1-sol": ModelPrice(2.00, 0.10, 10.00),
+    "gpt-6.1-terra": ModelPrice(1.00, 0.05, 5.00),
+    "gpt-6-sol": ModelPrice(2.00, 0.20, 10.00),
+    "gpt-6-luna": ModelPrice(0.10, 0.01, 0.50),
+    "gpt-5.6-sol": ModelPrice(4.00, 0.40, 20.00),
+    "gpt-5.6-terra": ModelPrice(2.00, 0.20, 12.00),
+    "gpt-5.6-luna": ModelPrice(0.20, 0.02, 1.20),
+    "gpt-5.5": ModelPrice(5.00, 0.50, 30.00),
+    "gpt-5.4": ModelPrice(2.50, 0.25, 15.00),
+    "gpt-5.4-mini": ModelPrice(0.75, 0.075, 4.50),
+    "gpt-5.4-nano": ModelPrice(0.20, 0.02, 1.25),
+    "gpt-5.2": ModelPrice(1.75, 0.175, 14.00),
+    "gpt-5.1": ModelPrice(1.25, 0.125, 10.00),
     "gpt-5": ModelPrice(1.25, 0.125, 10.00),
     "gpt-5-mini": ModelPrice(0.25, 0.025, 2.00),
     "gpt-5-nano": ModelPrice(0.05, 0.005, 0.40),
     "gpt-4.1": ModelPrice(2.00, 0.50, 8.00),
     "gpt-4.1-mini": ModelPrice(0.40, 0.10, 1.60),
+    # No longer on OpenAI's pricing page; last known price.
     "gpt-4.1-nano": ModelPrice(0.10, 0.025, 0.40),
     "gpt-4o": ModelPrice(2.50, 1.25, 10.00),
     "gpt-4o-mini": ModelPrice(0.15, 0.075, 0.60),
+    "o3": ModelPrice(2.00, 0.50, 8.00),
 }
 
 
